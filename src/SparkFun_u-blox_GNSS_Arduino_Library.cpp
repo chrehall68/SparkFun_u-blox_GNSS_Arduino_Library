@@ -4496,7 +4496,7 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForNoACKResponse(ubxPacket *outgoingUBX, 
         if (_printDebug == true)
         {
           _debugStream << "waitForNoACKResponse: valid data with CLS/ID match after ";
-          _debugStream << millis() - startTime;
+          _debugStream << std::dec << millis() - startTime;
           _debugStream << " msec" << endl;
         }
 
@@ -4516,7 +4516,7 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForNoACKResponse(ubxPacket *outgoingUBX, 
         if (_printDebug == true)
         {
           _debugStream << "waitForNoACKResponse: data being OVERWRITTEN after ";
-          _debugStream << millis() - startTime;
+          _debugStream << std::dec << millis() - startTime;
           _debugStream << " msec" << endl;
         }
 
@@ -4527,15 +4527,15 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForNoACKResponse(ubxPacket *outgoingUBX, 
       // and outgoingUBX->valid is VALID then this must be (e.g.) a PVT packet
       else if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED) && (outgoingUBX->valid == SFE_UBLOX_PACKET_VALIDITY_VALID))
       {
-        // if (_printDebug == true)
-        // {
-        //   _debugStream << "waitForNoACKResponse: valid but UNWANTED data after ";
-        //   _debugStream << millis() - startTime;
-        //   _debugStream << " msec. Class: ";
-        //   _debugStream << outgoingUBX->cls;
-        //   _debugStream << " ID: ";
-        //   _debugStream << outgoingUBX->id;
-        // }
+        if (_printDebug == true)
+        {
+          _debugStream << "waitForNoACKResponse: valid but UNWANTED data after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec. Class: ";
+          _debugStream << outgoingUBX->cls;
+          _debugStream << " ID: ";
+          _debugStream << outgoingUBX->id;
+        }
       }
 
       // If the outgoingUBX->classAndIDmatch is NOT_VALID then we return CRC failure
@@ -10040,28 +10040,28 @@ bool SFE_UBLOX_GNSS::getPVT(uint16_t maxWait)
   if (packetUBXNAVPVT->automaticFlags.flags.bits.automatic && packetUBXNAVPVT->automaticFlags.flags.bits.implicitUpdate)
   {
     // The GPS is automatically reporting, we just check whether we got unread data
-    //  if (_printDebug == true)
-    //  {
-    //    _debugStream << "getPVT: Autoreporting" << endl;
-    //  }
+    if (_printDebug == true)
+    {
+      _debugStream << "getPVT: Autoreporting" << endl;
+    }
     checkUbloxInternal(&packetCfg, UBX_CLASS_NAV, UBX_NAV_PVT);
     return packetUBXNAVPVT->moduleQueried.moduleQueried1.bits.all;
   }
   else if (packetUBXNAVPVT->automaticFlags.flags.bits.automatic && !packetUBXNAVPVT->automaticFlags.flags.bits.implicitUpdate)
   {
     // Someone else has to call checkUblox for us...
-    //  if (_printDebug == true)
-    //  {
-    //    _debugStream << "getPVT: Exit immediately" << endl;
-    //  }
+    if (_printDebug == true)
+    {
+      _debugStream << "getPVT: Exit immediately" << endl;
+    }
     return (false);
   }
   else
   {
-    // if (_printDebug == true)
-    // {
-    //   _debugStream << "getPVT: Polling" << endl;
-    // }
+    if (_printDebug == true)
+    {
+      _debugStream << "getPVT: Polling" << endl;
+    }
 
     // The GPS is not automatically reporting navigation position so we have to poll explicitly
     packetCfg.cls = UBX_CLASS_NAV;
@@ -10078,18 +10078,18 @@ bool SFE_UBLOX_GNSS::getPVT(uint16_t maxWait)
 
     if (retVal == SFE_UBLOX_STATUS_DATA_OVERWRITTEN)
     {
-      // if (_printDebug == true)
-      // {
-      //   _debugStream << "getPVT: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
-      // }
+      if (_printDebug == true)
+      {
+        _debugStream << "getPVT: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
+      }
       return (true);
     }
 
-    // if (_printDebug == true)
-    // {
-    //   _debugStream << "getPVT retVal: ";
-    //   _debugStream << statusString(retVal) << endl;
-    // }
+    if (_printDebug == true)
+    {
+      _debugStream << "getPVT retVal: ";
+      _debugStream << statusString(retVal) << endl;
+    }
     return (false);
   }
 }
