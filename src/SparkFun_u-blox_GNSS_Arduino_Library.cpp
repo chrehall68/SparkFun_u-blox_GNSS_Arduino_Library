@@ -40,27 +40,40 @@
   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include "SparkFun_u-blox_GNSS_Arduino_Library.h"
+#include "ublox/SparkFun_u-blox_GNSS_Arduino_Library.h"
+#include <memory.h>
+#include <chrono>
+#include <iomanip>
+#include <thread>
+using std::endl;
+
+// ========== Helpers ==========
+// Function to get the number of milliseconds since the program started
+std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+unsigned long millis()
+{
+  auto now = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+  return static_cast<unsigned long>(elapsed);
+}
+
+template <typename T>
+void printHexLn(ostream &o, T value)
+{
+  o << "0x" << std::hex << std::uppercase << std::setw(sizeof(T) * 2) << std::setfill('0') << static_cast<int>(value) << std::endl;
+}
+template <typename T>
+void printHex(ostream &o, T value)
+{
+  o << "0x" << std::hex << std::uppercase << std::setw(sizeof(T) * 2) << std::setfill('0') << static_cast<int>(value);
+}
+
+// ========== UBlox Methods ==========
 
 SFE_UBLOX_GNSS::SFE_UBLOX_GNSS(void)
 {
-  // Constructor
-  if (debugPin >= 0)
-  {
-    pinMode((uint8_t)debugPin, OUTPUT);
-    digitalWrite((uint8_t)debugPin, HIGH);
-  }
-
   _logNMEA.all = 0;                             // Default to passing no NMEA messages to the file buffer
   _processNMEA.all = SFE_UBLOX_FILTER_NMEA_ALL; // Default to passing all NMEA messages to processNMEA
-
-  // Support for platforms like ESP32 which do not support multiple I2C restarts
-  // If _i2cStopRestart is true, endTransmission will always use a stop. If false, a restart will be used where needed.
-#if defined(ARDUINO_ARCH_ESP32)
-  _i2cStopRestart = true; // Always use a stop
-#else
-  _i2cStopRestart = false; // Use a restart where needed
-#endif
 }
 
 SFE_UBLOX_GNSS::~SFE_UBLOX_GNSS(void)
@@ -99,12 +112,10 @@ void SFE_UBLOX_GNSS::end(void)
 
   if (ubxFileBuffer != NULL) // Check if RAM has been allocated for the file buffer
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
     if (_printDebug == true)
     {
-      _debugSerial->println(F("end: the file buffer has been deleted. You will need to call setFileBufferSize before .begin to create a new one."));
+      _debugStream << "end: the file buffer has been deleted. You will need to call setFileBufferSize before .begin to create a new one." << endl;
     }
-#endif
     delete[] ubxFileBuffer; // Created with new[]
     ubxFileBuffer = NULL;   // Redundant?
     fileBufferSize = 0;     // Reset file buffer size. User will have to call setFileBufferSize again
@@ -174,21 +185,18 @@ void SFE_UBLOX_GNSS::end(void)
     if (packetUBXNAVPVT->callbackData != NULL)
     {
       delete packetUBXNAVPVT->callbackData;
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
       if (_printDebug == true)
       {
-        _debugSerial->println(F("end: packetUBXNAVPVT->callbackData has been deleted"));
+        _debugStream << "end: packetUBXNAVPVT->callbackData has been deleted" << endl;
       }
-#endif
     }
     delete packetUBXNAVPVT;
     packetUBXNAVPVT = NULL; // Redundant?
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("end: packetUBXNAVPVT has been deleted"));
+      _debugStream << "end: packetUBXNAVPVT has been deleted" << endl;
     }
-#endif
   }
 
   if (packetUBXNAVODO != NULL)
@@ -586,7 +594,7 @@ bool SFE_UBLOX_GNSS::setPacketCfgPayloadSize(size_t payloadSize)
     packetCfg.payload = payloadCfg;
     packetCfgPayloadSize = payloadSize;
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setPacketCfgPayloadSize: Zero payloadSize!"));
+      _debugStream << "setPacketCfgPayloadSize: Zero payloadSize!" << endl;
   }
 
   else if (payloadCfg == NULL) // Memory has not yet been allocated - so use new
@@ -598,7 +606,7 @@ bool SFE_UBLOX_GNSS::setPacketCfgPayloadSize(size_t payloadSize)
       success = false;
       packetCfgPayloadSize = 0;
       if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-        _debugSerial->println(F("setPacketCfgPayloadSize: RAM alloc failed!"));
+        _debugStream << "setPacketCfgPayloadSize: RAM alloc failed!" << endl;
     }
     else
       packetCfgPayloadSize = payloadSize;
@@ -612,7 +620,7 @@ bool SFE_UBLOX_GNSS::setPacketCfgPayloadSize(size_t payloadSize)
     {
       success = false;                                           // Report failure. Don't change payloadCfg, packetCfg.payload or packetCfgPayloadSize
       if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-        _debugSerial->println(F("setPacketCfgPayloadSize: RAM resize failed!"));
+        _debugStream << "setPacketCfgPayloadSize: RAM resize failed!" << endl;
     }
     else
     {
@@ -631,69 +639,6 @@ bool SFE_UBLOX_GNSS::setPacketCfgPayloadSize(size_t payloadSize)
 size_t SFE_UBLOX_GNSS::getPacketCfgSpaceRemaining()
 {
   return (packetCfgPayloadSize - packetCfg.len);
-}
-
-// Initialize the I2C port
-bool SFE_UBLOX_GNSS::begin(TwoWire &wirePort, uint8_t deviceAddress, uint16_t maxWait, bool assumeSuccess)
-{
-  commType = COMM_TYPE_I2C;
-  _i2cPort = &wirePort; // Grab which port the user wants us to use
-  _signsOfLife = false; // Clear the _signsOfLife flag. It will be set true if valid traffic is seen.
-
-  // We expect caller to begin their I2C port, with the speed of their choice external to the library
-  // But if they forget, we start the hardware here.
-
-  // We're moving away from the practice of starting Wire hardware in a library. This is to avoid cross platform issues.
-  // ie, there are some platforms that don't handle multiple starts to the wire hardware. Also, every time you start the wire
-  // hardware the clock speed reverts back to 100kHz regardless of previous Wire.setClocks().
-  //_i2cPort->begin();
-
-  _gpsI2Caddress = deviceAddress; // Store the I2C address from user
-
-  // New in v2.0: allocate memory for the packetCfg payload here - if required. (The user may have called setPacketCfgPayloadSize already)
-  if (packetCfgPayloadSize == 0)
-    setPacketCfgPayloadSize(MAX_PAYLOAD_SIZE);
-
-  // New in v2.0: allocate memory for the file buffer - if required. (The user should have called setFileBufferSize already)
-  createFileBuffer();
-
-  // Call isConnected up to three times - tests on the NEO-M8U show the CFG RATE poll occasionally being ignored
-  bool connected = isConnected(maxWait);
-
-  if (!connected)
-  {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-    {
-      _debugSerial->println(F("begin: isConnected - second attempt"));
-    }
-#endif
-    connected = isConnected(maxWait);
-  }
-
-  if (!connected)
-  {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-    {
-      _debugSerial->println(F("begin: isConnected - third attempt"));
-    }
-#endif
-    connected = isConnected(maxWait);
-  }
-
-  if ((!connected) && assumeSuccess && _signsOfLife) // Advanced users can assume success if required. Useful if the port is outputting messages at high navigation rate.
-  {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-    {
-      _debugSerial->println(F("begin: third attempt failed. Assuming success..."));
-    }
-#endif
-    return (true);
-  }
-
-  return (connected);
 }
 
 // Initialize the Serial port
@@ -739,176 +684,34 @@ bool SFE_UBLOX_GNSS::begin(Stream &serialPort, uint16_t maxWait, bool assumeSucc
 
   if (!connected)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("begin: isConnected - second attempt"));
+      _debugStream << "begin: isConnected - second attempt" << endl;
     }
-#endif
     connected = isConnected(maxWait);
   }
 
   if (!connected)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("begin: isConnected - third attempt"));
+      _debugStream << "begin: isConnected - third attempt" << endl;
     }
-#endif
     connected = isConnected(maxWait);
   }
 
   if ((!connected) && assumeSuccess && _signsOfLife) // Advanced users can assume success if required. Useful if the port is outputting messages at high navigation rate.
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("begin: third attempt failed. Assuming success..."));
+      _debugStream << "begin: third attempt failed. Assuming success..." << endl;
     }
-#endif
+
     return (true);
   }
 
   return (connected);
-}
-
-// Initialize for SPI
-bool SFE_UBLOX_GNSS::begin(SPIClass &spiPort, uint8_t csPin, uint32_t spiSpeed, uint16_t maxWait, bool assumeSuccess)
-{
-  commType = COMM_TYPE_SPI;
-  _spiPort = &spiPort;
-  _csPin = csPin;
-  _spiSpeed = spiSpeed;
-  _signsOfLife = false; // Clear the _signsOfLife flag. It will be set true if valid traffic is seen.
-
-  // Initialize the chip select pin
-  pinMode(_csPin, OUTPUT);
-  digitalWrite(_csPin, HIGH);
-
-  // New in v2.0: allocate memory for the packetCfg payload here - if required. (The user may have called setPacketCfgPayloadSize already)
-  if (packetCfgPayloadSize == 0)
-    setPacketCfgPayloadSize(MAX_PAYLOAD_SIZE);
-
-  createFileBuffer();
-
-  // Create the SPI buffer
-  if (spiBuffer == NULL) // Memory has not yet been allocated - so use new
-  {
-    spiBuffer = new uint8_t[getSpiTransactionSize()];
-  }
-
-  if (spiBuffer == NULL)
-  {
-    if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-    {
-      _debugSerial->print(F("begin (SPI): memory allocation failed for SPI Buffer!"));
-      return (false);
-    }
-  }
-  else
-  {
-    // Initialize/clear the SPI buffer - fill it with 0xFF as this is what is received from the UBLOX module if there's no data to be processed
-    for (uint8_t i = 0; i < getSpiTransactionSize(); i++)
-    {
-      spiBuffer[i] = 0xFF;
-    }
-  }
-
-  // Call isConnected up to three times - tests on the NEO-M8U show the CFG RATE poll occasionally being ignored
-  bool connected = isConnected(maxWait);
-
-  if (!connected)
-  {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-    {
-      _debugSerial->println(F("begin: isConnected - second attempt"));
-    }
-#endif
-    connected = isConnected(maxWait);
-  }
-
-  if (!connected)
-  {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-    {
-      _debugSerial->println(F("begin: isConnected - third attempt"));
-    }
-#endif
-    connected = isConnected(maxWait);
-  }
-
-  if ((!connected) && assumeSuccess && _signsOfLife) // Advanced users can assume success if required. Useful if the port is outputting messages at high navigation rate.
-  {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-    {
-      _debugSerial->println(F("begin: third attempt failed. Assuming success..."));
-    }
-#endif
-    return (true);
-  }
-
-  return (connected);
-}
-
-// Allow the user to change I2C polling wait (the minimum interval between I2C data requests - to avoid pounding the bus)
-// i2cPollingWait defaults to 100ms and is adjusted automatically when setNavigationFrequency()
-// or setHNRNavigationRate() are called. But if the user is using callbacks, it might be advantageous
-// to be able to set the polling wait manually.
-void SFE_UBLOX_GNSS::setI2CpollingWait(uint8_t newPollingWait_ms)
-{
-  i2cPollingWait = newPollingWait_ms;
-}
-
-// Allow the user to change SPI polling wait
-// (the minimum interval between SPI data requests when no data is available - to avoid pounding the bus)
-void SFE_UBLOX_GNSS::setSPIpollingWait(uint8_t newPollingWait_ms)
-{
-  spiPollingWait = newPollingWait_ms;
-}
-
-// Sets the global size for I2C transactions
-// Most platforms use 32 bytes (the default) but this allows users to increase the transaction
-// size if the platform supports it
-// Note: If the transaction size is set larger than the platforms buffer size, bad things will happen.
-void SFE_UBLOX_GNSS::setI2CTransactionSize(uint8_t transactionSize)
-{
-  if (transactionSize < 8)
-    transactionSize = 8; // Ensure transactionSize is at least 8 bytes otherwise sendI2cCommand will have problems!
-
-  i2cTransactionSize = transactionSize;
-}
-uint8_t SFE_UBLOX_GNSS::getI2CTransactionSize(void)
-{
-  return (i2cTransactionSize);
-}
-
-// Sets the global size for the SPI buffer/transactions.
-// Call this **before** begin()!
-// Note: if the buffer size is too small, incoming characters may be lost if the message sent
-// is larger than this buffer. If too big, you may run out of SRAM on constrained architectures!
-void SFE_UBLOX_GNSS::setSpiTransactionSize(uint8_t transactionSize)
-{
-  if (spiBuffer == NULL)
-  {
-    spiTransactionSize = transactionSize;
-  }
-  else
-  {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if (_printDebug == true)
-    {
-      _debugSerial->println(F("setSpiTransactionSize: you need to call setSpiTransactionSize _before_ begin!"));
-    }
-#endif
-  }
-}
-uint8_t SFE_UBLOX_GNSS::getSpiTransactionSize(void)
-{
-  return (spiTransactionSize);
 }
 
 // Sets the size of maxNMEAByteCount
@@ -924,28 +727,20 @@ int8_t SFE_UBLOX_GNSS::getMaxNMEAByteCount(void)
 // Returns true if I2C device ack's
 bool SFE_UBLOX_GNSS::isConnected(uint16_t maxWait)
 {
-  if (commType == COMM_TYPE_I2C)
-  {
-    _i2cPort->beginTransmission((uint8_t)_gpsI2Caddress);
-    if (_i2cPort->endTransmission() != 0)
-      return false; // Sensor did not ack
-  }
-
   // Query port configuration to see whether we get a meaningful response
   // We could simply request the config for any port but, just for giggles, let's request the config for most appropriate port
   if (commType == COMM_TYPE_I2C)
-    return (getPortSettingsInternal(COM_PORT_I2C, maxWait));
+    return false;
   else if (commType == COMM_TYPE_SERIAL)
     return (getPortSettingsInternal(COM_PORT_UART1, maxWait)); // Could be UART2 - but this is just a response check
   else                                                         // if (commType == COMM_TYPE_SPI)
-    return (getPortSettingsInternal(COM_PORT_SPI, maxWait));
+    return false;
 }
 
 // Enable or disable the printing of sent/response HEX values.
 // Use this in conjunction with 'Transport Logging' from the Universal Reader Assistant to see what they're doing that we're not
-void SFE_UBLOX_GNSS::enableDebugging(Stream &debugPort, bool printLimitedDebug)
+void SFE_UBLOX_GNSS::enableDebugging(bool printLimitedDebug)
 {
-  _debugSerial = &debugPort; // Grab which port the user wants us to use for debugging
   if (printLimitedDebug == false)
   {
     _printDebug = true; // Should we print the commands we send? Good for debugging
@@ -966,7 +761,7 @@ void SFE_UBLOX_GNSS::debugPrint(char *message)
 {
   if (_printDebug == true)
   {
-    _debugSerial->print(message);
+    _debugStream << message;
   }
 }
 // Safely print messages
@@ -974,7 +769,7 @@ void SFE_UBLOX_GNSS::debugPrintln(char *message)
 {
   if (_printDebug == true)
   {
-    _debugSerial->println(message);
+    _debugStream << message << endl;
   }
 }
 
@@ -1049,216 +844,13 @@ bool SFE_UBLOX_GNSS::checkUblox(uint8_t requestedClass, uint8_t requestedID)
 bool SFE_UBLOX_GNSS::checkUbloxInternal(ubxPacket *incomingUBX, uint8_t requestedClass, uint8_t requestedID)
 {
   if (commType == COMM_TYPE_I2C)
-    return (checkUbloxI2C(incomingUBX, requestedClass, requestedID));
+    return false;
   else if (commType == COMM_TYPE_SERIAL)
     return (checkUbloxSerial(incomingUBX, requestedClass, requestedID));
   else if (commType == COMM_TYPE_SPI)
-    return (checkUbloxSpi(incomingUBX, requestedClass, requestedID));
+    return false;
   return false;
 }
-
-// Polls I2C for data, passing any new bytes to process()
-// Returns true if new bytes are available
-bool SFE_UBLOX_GNSS::checkUbloxI2C(ubxPacket *incomingUBX, uint8_t requestedClass, uint8_t requestedID)
-{
-  if (millis() - lastCheck >= i2cPollingWait)
-  {
-    // Get the number of bytes available from the module
-    uint16_t bytesAvailable = 0;
-    _i2cPort->beginTransmission(_gpsI2Caddress);
-    _i2cPort->write(0xFD);                               // 0xFD (MSB) and 0xFE (LSB) are the registers that contain number of bytes available
-    uint8_t i2cError = _i2cPort->endTransmission(false); // Always send a restart command. Do not release the bus. ESP32 supports this.
-    if (i2cError != 0)
-    {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-      if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      {
-        _debugSerial->print(F("checkUbloxI2C: I2C error: endTransmission returned "));
-        _debugSerial->println(i2cError);
-      }
-#endif
-      return (false); // Sensor did not ACK
-    }
-
-    // Forcing requestFrom to use a restart would be unwise. If bytesAvailable is zero, we want to surrender the bus.
-    uint8_t bytesReturned = _i2cPort->requestFrom((uint8_t)_gpsI2Caddress, static_cast<uint8_t>(2));
-    if (bytesReturned != 2)
-    {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-      if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      {
-        _debugSerial->print(F("checkUbloxI2C: I2C error: requestFrom 0xFD returned "));
-        _debugSerial->println(bytesReturned);
-      }
-#endif
-      return (false); // Sensor did not return 2 bytes
-    }
-    else // if (_i2cPort->available())
-    {
-      uint8_t msb = _i2cPort->read();
-      uint8_t lsb = _i2cPort->read();
-      // if (lsb == 0xFF)
-      // {
-      //   //I believe this is a u-blox bug. Device should never present an 0xFF.
-      //   if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      //   {
-      //     _debugSerial->print(F("checkUbloxI2C: u-blox bug? Length lsb is 0xFF. i2cPollingWait is "));
-      //     _debugSerial->println(i2cPollingWait);
-      //   }
-      //   if (debugPin >= 0)
-      //   {
-      //     digitalWrite((uint8_t)debugPin, LOW);
-      //     delay(10);
-      //     digitalWrite((uint8_t)debugPin, HIGH);
-      //   }
-      //   lastCheck = millis(); //Put off checking to avoid I2C bus traffic
-      //   return (false);
-      // }
-      // if (msb == 0xFF)
-      // {
-      //   //I believe this is a u-blox bug. Device should never present an 0xFF.
-      //   if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      //   {
-      //     _debugSerial->print(F("checkUbloxI2C: u-blox bug? Length msb is 0xFF. i2cPollingWait is "));
-      //     _debugSerial->println(i2cPollingWait);
-      //   }
-      //   if (debugPin >= 0)
-      //   {
-      //     digitalWrite((uint8_t)debugPin, LOW);
-      //     delay(10);
-      //     digitalWrite((uint8_t)debugPin, HIGH);
-      //   }
-      //   lastCheck = millis(); //Put off checking to avoid I2C bus traffic
-      //   return (false);
-      // }
-      bytesAvailable = (uint16_t)msb << 8 | lsb;
-    }
-
-    if (bytesAvailable == 0)
-    {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-      if (_printDebug == true)
-      {
-        _debugSerial->println(F("checkUbloxI2C: OK, zero bytes available"));
-      }
-#endif
-      lastCheck = millis(); // Put off checking to avoid I2C bus traffic
-      return (false);
-    }
-
-    // Check for undocumented bit error. We found this doing logic scans.
-    // This error is rare but if we incorrectly interpret the first bit of the two 'data available' bytes as 1
-    // then we have far too many bytes to check. May be related to I2C setup time violations: https://github.com/sparkfun/SparkFun_Ublox_Arduino_Library/issues/40
-    if (bytesAvailable & ((uint16_t)1 << 15))
-    {
-      // Clear the MSbit
-      bytesAvailable &= ~((uint16_t)1 << 15);
-
-      // if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      // {
-      //   _debugSerial->print(F("checkUbloxI2C: Bytes available error: "));
-      //   _debugSerial->println(bytesAvailable);
-      //   if (debugPin >= 0)
-      //   {
-      //     digitalWrite((uint8_t)debugPin, LOW);
-      //     delay(10);
-      //     digitalWrite((uint8_t)debugPin, HIGH);
-      //   }
-      // }
-    }
-
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if (bytesAvailable > 100)
-    {
-      if (_printDebug == true)
-      {
-        _debugSerial->print(F("checkUbloxI2C: Large packet of "));
-        _debugSerial->print(bytesAvailable);
-        _debugSerial->println(F(" bytes received"));
-      }
-    }
-    else
-    {
-      if (_printDebug == true)
-      {
-        _debugSerial->print(F("checkUbloxI2C: Reading "));
-        _debugSerial->print(bytesAvailable);
-        _debugSerial->println(F(" bytes"));
-      }
-    }
-#endif
-
-    while (bytesAvailable)
-    {
-      // From the u-blox integration manual:
-      // "There are two forms of DDC read transfer. The "random access" form includes a peripheral register
-      //  address and thus allows any register to be read. The second "current address" form omits the
-      //  register address. If this second form is used, then an address pointer in the receiver is used to
-      //  determine which register to read. This address pointer will increment after each read unless it
-      //  is already pointing at register 0xFF, the highest addressable register, in which case it remains
-      //  unaltered."
-      // This means that after reading bytesAvailable from 0xFD and 0xFE, the address pointer will already be
-      // pointing at 0xFF, so we do not need to write it here. The next four lines can be commented.
-      //_i2cPort->beginTransmission(_gpsI2Caddress);
-      //_i2cPort->write(0xFF);                     //0xFF is the register to read data from
-      // if (_i2cPort->endTransmission(false) != 0) //Send a restart command. Do not release bus.
-      //  return (false);                          //Sensor did not ACK
-
-      // Limit to 32 bytes or whatever the buffer limit is for given platform
-      uint16_t bytesToRead = bytesAvailable; // 16-bit
-      if (bytesToRead > i2cTransactionSize)  // Limit for i2cTransactionSize is 8-bit
-        bytesToRead = i2cTransactionSize;
-
-      // TRY_AGAIN:
-
-      // Here it would be desireable to use a restart where possible / supported, but only if there will be multiple reads.
-      // However, if an individual requestFrom fails, we could end up leaving the bus hanging.
-      // On balance, it is probably safest to not use restarts here.
-      uint8_t bytesReturned = _i2cPort->requestFrom((uint8_t)_gpsI2Caddress, (uint8_t)bytesToRead);
-      if ((uint16_t)bytesReturned == bytesToRead)
-      {
-        for (uint16_t x = 0; x < bytesToRead; x++)
-        {
-          uint8_t incoming = _i2cPort->read(); // Grab the actual character
-
-          // Check to see if the first read is 0x7F. If it is, the module is not ready to respond. Stop, wait, and try again.
-          // Note: the integration manual says:
-          //"If there is no data awaiting transmission from the receiver, then this register will deliver the value 0xFF,
-          //  which cannot be the first byte of a valid message."
-          // But it can be the first byte waiting to be read from the buffer if we have already read part of the message.
-          // Therefore I think this check needs to be commented.
-          //  if (x == 0)
-          //  {
-          //    if ((incoming == 0x7F) && (ubx7FcheckDisabled == false))
-          //    {
-          //      if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-          //      {
-          //        _debugSerial->println(F("checkUbloxU2C: u-blox error, module not ready with data (7F error)"));
-          //      }
-          //      delay(5); //In logic analyzation, the module starting responding after 1.48ms
-          //      if (debugPin >= 0)
-          //      {
-          //        digitalWrite((uint8_t)debugPin, LOW);
-          //        delay(10);
-          //        digitalWrite((uint8_t)debugPin, HIGH);
-          //      }
-          //      goto TRY_AGAIN;
-          //    }
-          //  }
-
-          process(incoming, incomingUBX, requestedClass, requestedID); // Process this valid character
-        }
-      }
-      else
-        return (false); // Sensor did not respond
-
-      bytesAvailable -= bytesToRead;
-    }
-  }
-
-  return (true);
-
-} // end checkUbloxI2C()
 
 // Checks Serial for data, passing any new bytes to process()
 bool SFE_UBLOX_GNSS::checkUbloxSerial(ubxPacket *incomingUBX, uint8_t requestedClass, uint8_t requestedID)
@@ -1270,44 +862,6 @@ bool SFE_UBLOX_GNSS::checkUbloxSerial(ubxPacket *incomingUBX, uint8_t requestedC
   return (true);
 
 } // end checkUbloxSerial()
-
-// Checks SPI for data, passing any new bytes to process()
-bool SFE_UBLOX_GNSS::checkUbloxSpi(ubxPacket *incomingUBX, uint8_t requestedClass, uint8_t requestedID)
-{
-  // Process the contents of the SPI buffer if not empty!
-  for (uint8_t i = 0; i < spiBufferIndex; i++)
-  {
-    process(spiBuffer[i], incomingUBX, requestedClass, requestedID);
-  }
-  spiBufferIndex = 0;
-
-  _spiPort->beginTransaction(SPISettings(_spiSpeed, MSBFIRST, SPI_MODE0));
-  digitalWrite(_csPin, LOW);
-  uint8_t byteReturned = _spiPort->transfer(0xFF);
-
-  // Note to future self: I think the 0xFF check might cause problems when attempting to process (e.g.) RAWX data
-  // which could legitimately contain 0xFF within the data stream. But the currentSentence check will certainly help!
-
-  // If we are not receiving a sentence (currentSentence == NONE) and the byteReturned is 0xFF,
-  // i.e. the module has no data for us, then delay for
-  if ((byteReturned == 0xFF) && (currentSentence == SFE_UBLOX_SENTENCE_TYPE_NONE))
-  {
-    digitalWrite(_csPin, HIGH);
-    _spiPort->endTransaction();
-    delay(spiPollingWait);
-    return (true);
-  }
-
-  while ((byteReturned != 0xFF) || (currentSentence != SFE_UBLOX_SENTENCE_TYPE_NONE))
-  {
-    process(byteReturned, incomingUBX, requestedClass, requestedID);
-    byteReturned = _spiPort->transfer(0xFF);
-  }
-  digitalWrite(_csPin, HIGH);
-  _spiPort->endTransaction();
-  return (true);
-
-} // end checkUbloxSpi()
 
 // PRIVATE: Check if we have storage allocated for an incoming "automatic" message
 bool SFE_UBLOX_GNSS::checkAutomatic(uint8_t Class, uint8_t ID)
@@ -1772,24 +1326,23 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
           uint16_t maxPayload = getMaxPayloadSize(packetBuf.cls, packetBuf.id); // Calculate how much RAM we need
           if (maxPayload == 0)
           {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
             if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
             {
-              _debugSerial->print(F("process: getMaxPayloadSize returned ZERO!! Class: 0x"));
-              _debugSerial->print(packetBuf.cls);
-              _debugSerial->print(F(" ID: 0x"));
-              _debugSerial->println(packetBuf.id);
+              _debugStream << "process: getMaxPayloadSize returned ZERO!! Class: 0x";
+              _debugStream << packetBuf.cls;
+              _debugStream << " ID: 0x";
+              _debugStream << packetBuf.id << endl;
             }
-#endif
           }
           if (payloadAuto != NULL) // Check if memory is already allocated - this should be impossible!
           {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
             if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
             {
-              _debugSerial->println(F("process: memory is already allocated for payloadAuto! Deleting..."));
+              _debugStream << "process: memory is already allocated for payloadAuto! Deleting..." << endl;
             }
-#endif
+
             delete[] payloadAuto; // Created with new[]
             payloadAuto = NULL;   // Redundant?
             packetAuto.payload = payloadAuto;
@@ -1798,16 +1351,16 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
           packetAuto.payload = payloadAuto;
           if (payloadAuto == NULL) // Check if the alloc failed
           {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
             if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
             {
-              _debugSerial->print(F("process: memory allocation failed for \"automatic\" message: Class: 0x"));
-              _debugSerial->print(packetBuf.cls, HEX);
-              _debugSerial->print(F(" ID: 0x"));
-              _debugSerial->println(packetBuf.id, HEX);
-              _debugSerial->println(F("process: \"automatic\" message could overwrite data"));
+              _debugStream << "process: memory allocation failed for \"automatic\" message: Class: 0x";
+              printHex(_debugStream, packetBuf.cls);
+              _debugStream << " ID: 0x";
+              printHexLn(_debugStream, packetBuf.id);
+              _debugStream << "process: \"automatic\" message could overwrite data" << endl;
             }
-#endif
+
             // The RAM allocation failed so fall back to using incomingUBX (usually packetCfg) even though we risk overwriting data
             activePacketBuffer = SFE_UBLOX_PACKET_PACKETCFG;
             incomingUBX->cls = packetBuf.cls; // Copy the class and ID into incomingUBX (usually packetCfg)
@@ -1822,15 +1375,14 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
             packetAuto.id = packetBuf.id;
             packetAuto.counter = packetBuf.counter;           // Copy over the .counter too
             packetAuto.startingSpot = packetBuf.startingSpot; // And the starting spot? (Probably redundant)
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
             if (_printDebug == true)
             {
-              _debugSerial->print(F("process: incoming \"automatic\" message: Class: 0x"));
-              _debugSerial->print(packetBuf.cls, HEX);
-              _debugSerial->print(F(" ID: 0x"));
-              _debugSerial->println(packetBuf.id, HEX);
+              _debugStream << "process: incoming \"automatic\" message: Class: 0x";
+              printHex(_debugStream, packetBuf.cls);
+              _debugStream << " ID: 0x";
+              printHexLn(_debugStream, packetBuf.id);
             }
-#endif
           }
         }
         else
@@ -1861,15 +1413,15 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
     {
       if (packetBuf.len == 0) // Check if length is zero (hopefully this is impossible!)
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
         {
-          _debugSerial->print(F("process: ZERO LENGTH packet received: Class: 0x"));
-          _debugSerial->print(packetBuf.cls, HEX);
-          _debugSerial->print(F(" ID: 0x"));
-          _debugSerial->println(packetBuf.id, HEX);
+          _debugStream << "process: ZERO LENGTH packet received: Class: 0x";
+          printHex(_debugStream, packetBuf.cls);
+          _debugStream << " ID: 0x";
+          printHexLn(_debugStream, packetBuf.id);
         }
-#endif
+
         // If length is zero (!) this will be the first byte of the checksum so record it
         packetBuf.checksumA = incoming;
       }
@@ -1914,17 +1466,16 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
         }
         else // Length is not 2 (hopefully this is impossible!)
         {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
           if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
           {
-            _debugSerial->print(F("process: ACK received with .len != 2: Class: 0x"));
-            _debugSerial->print(packetBuf.payload[0], HEX);
-            _debugSerial->print(F(" ID: 0x"));
-            _debugSerial->print(packetBuf.payload[1], HEX);
-            _debugSerial->print(F(" len: "));
-            _debugSerial->println(packetBuf.len);
+            _debugStream << "process: ACK received with .len != 2: Class: 0x";
+            printHex(_debugStream, packetBuf.payload[0]);
+            _debugStream << " ID: 0x";
+            printHex(_debugStream, packetBuf.payload[1]);
+            _debugStream << " len: ";
+            _debugStream << packetBuf.len << endl;
           }
-#endif
         }
       }
     }
@@ -1980,7 +1531,7 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
       {
         // if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
         // {
-        //   _debugSerial->println(F("process: non-auto NMEA message"));
+        //   _debugStream << "process: non-auto NMEA message" << endl;
         // }
       }
 
@@ -2017,7 +1568,7 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
           {
             if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
             {
-              _debugSerial->println(F("process: NMEA buffer is full!"));
+              _debugStream << "process: NMEA buffer is full!" << endl;
             }
           }
         }
@@ -2096,13 +1647,13 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
           {
             if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
             {
-              _debugSerial->print(F("process: NMEA checksum fail (2)! Expected "));
-              _debugSerial->write(expectedChecksum1);
-              _debugSerial->write(expectedChecksum2);
-              _debugSerial->print(F(" Got "));
-              _debugSerial->write(*(workingNMEAPtr + charsChecked));
-              _debugSerial->write(*(workingNMEAPtr + charsChecked + 1));
-              _debugSerial->println();
+              _debugStream << "process: NMEA checksum fail (2)! Expected ";
+              _debugStream << (expectedChecksum1);
+              _debugStream << (expectedChecksum2);
+              _debugStream << " Got ";
+              _debugStream << (*(workingNMEAPtr + charsChecked));
+              _debugStream << (*(workingNMEAPtr + charsChecked + 1));
+              _debugStream << endl;
             }
           }
         }
@@ -2110,7 +1661,7 @@ void SFE_UBLOX_GNSS::process(uint8_t incoming, ubxPacket *incomingUBX, uint8_t r
         {
           if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
           {
-            _debugSerial->println(F("process: NMEA checksum fail (1)!"));
+            _debugStream << "process: NMEA checksum fail (1)!" << endl;
           }
         }
       }
@@ -2927,15 +2478,15 @@ SFE_UBLOX_GNSS::sfe_ublox_sentence_types_e SFE_UBLOX_GNSS::processRTCMframe(uint
 // Bytes can be piped to Serial or other interface. The consumer could be a radio or the internet (Ntrip broadcaster)
 void SFE_UBLOX_GNSS::processRTCM_v(uint8_t incoming)
 {
-  // Radio.sendReliable((String)incoming); //An example of passing this byte to a radio
+  // Radio.sendReliable((string)incoming); //An example of passing this byte to a radio
 
-  //_debugSerial->write(incoming); //An example of passing this byte out the serial port
+  //_debugStream << (incoming); //An example of passing this byte out the serial port
 
   // Debug printing
-  //   _debugSerial->print(F(" "));
-  //   if(incoming < 0x10) _debugSerial->print(F("0"));
-  //   _debugSerial->print(incoming, HEX);
-  //   if(rtcmFrameCounter % 16 == 0) _debugSerial->println();
+  //   _debugStream << " ";
+  //   if(incoming < 0x10) _debugStream << "0";
+  //   _debugStream << incoming, HEX;
+  //   if(rtcmFrameCounter % 16 == 0) _debugStream <<  << endl;
 
   (void)incoming; // Do something with incoming just to get rid of the pesky compiler warning!
 }
@@ -2967,15 +2518,14 @@ void SFE_UBLOX_GNSS::processUBX(uint8_t incoming, ubxPacket *incomingUBX, uint8_
     maximum_payload_size = getMaxPayloadSize(incomingUBX->cls, incomingUBX->id);
     if (maximum_payload_size == 0)
     {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
       if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
       {
-        _debugSerial->print(F("processUBX: getMaxPayloadSize returned ZERO!! Class: 0x"));
-        _debugSerial->print(incomingUBX->cls);
-        _debugSerial->print(F(" ID: 0x"));
-        _debugSerial->println(incomingUBX->id);
+        _debugStream << "processUBX: getMaxPayloadSize returned ZERO!! Class: 0x";
+        _debugStream << incomingUBX->cls;
+        _debugStream << " ID: 0x";
+        _debugStream << incomingUBX->id << endl;
       }
-#endif
     }
     //}
     // else
@@ -3040,15 +2590,14 @@ void SFE_UBLOX_GNSS::processUBX(uint8_t incoming, ubxPacket *incomingUBX, uint8_
       else if ((incomingUBX->cls == UBX_CLASS_ACK) && (incomingUBX->id == UBX_ACK_NACK) && (incomingUBX->payload[0] == requestedClass) && (incomingUBX->payload[1] == requestedID))
       {
         incomingUBX->classAndIDmatch = SFE_UBLOX_PACKET_NOTACKNOWLEDGED; // If we have a match, set the classAndIDmatch flag to NOTACKNOWLEDGED
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("processUBX: NACK received: Requested Class: 0x"));
-          _debugSerial->print(incomingUBX->payload[0], HEX);
-          _debugSerial->print(F(" Requested ID: 0x"));
-          _debugSerial->println(incomingUBX->payload[1], HEX);
+          _debugStream << "processUBX: NACK received: Requested Class: 0x";
+          printHex(_debugStream, incomingUBX->payload[0]);
+          _debugStream << " Requested ID: 0x";
+          printHexLn(_debugStream, incomingUBX->payload[1]);
         }
-#endif
       }
 
       // This is not an ACK and we do not have a complete class and ID match
@@ -3057,43 +2606,40 @@ void SFE_UBLOX_GNSS::processUBX(uint8_t incoming, ubxPacket *incomingUBX, uint8_
       {
         // This isn't the message we are looking for...
         // Let's say so and leave incomingUBX->classAndIDmatch _unchanged_
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("processUBX: incoming \"automatic\" message: Class: 0x"));
-          _debugSerial->print(incomingUBX->cls, HEX);
-          _debugSerial->print(F(" ID: 0x"));
-          _debugSerial->println(incomingUBX->id, HEX);
+          _debugStream << "processUBX: incoming \"automatic\" message: Class: 0x";
+          printHex(_debugStream, incomingUBX->cls);
+          _debugStream << " ID: 0x";
+          printHexLn(_debugStream, incomingUBX->id);
         }
-#endif
       }
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
       if (_printDebug == true)
       {
-        _debugSerial->print(F("Incoming: Size: "));
-        _debugSerial->print(incomingUBX->len);
-        _debugSerial->print(F(" Received: "));
+        _debugStream << "Incoming: Size: ";
+        _debugStream << incomingUBX->len;
+        _debugStream << " Received: ";
         printPacket(incomingUBX);
 
         if (incomingUBX->valid == SFE_UBLOX_PACKET_VALIDITY_VALID)
         {
-          _debugSerial->println(F("packetCfg now valid"));
+          _debugStream << "packetCfg now valid" << endl;
         }
         if (packetAck.valid == SFE_UBLOX_PACKET_VALIDITY_VALID)
         {
-          _debugSerial->println(F("packetAck now valid"));
+          _debugStream << "packetAck now valid" << endl;
         }
         if (incomingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID)
         {
-          _debugSerial->println(F("packetCfg classAndIDmatch"));
+          _debugStream << "packetCfg classAndIDmatch" << endl;
         }
         if (packetAck.classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID)
         {
-          _debugSerial->println(F("packetAck classAndIDmatch"));
+          _debugStream << "packetAck classAndIDmatch" << endl;
         }
       }
-#endif
 
       // We've got a valid packet, now do something with it but only if ignoreThisPayload is false
       if (ignoreThisPayload == false)
@@ -3121,27 +2667,17 @@ void SFE_UBLOX_GNSS::processUBX(uint8_t incoming, ubxPacket *incomingUBX, uint8_
 
       if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
       {
-        // Drive an external pin to allow for easier logic analyzation
-        if (debugPin >= 0)
-        {
-          digitalWrite((uint8_t)debugPin, LOW);
-          delay(10);
-          digitalWrite((uint8_t)debugPin, HIGH);
-        }
+        _debugStream << "Checksum failed:";
+        _debugStream << " checksumA: ";
+        _debugStream << incomingUBX->checksumA;
+        _debugStream << " checksumB: ";
+        _debugStream << incomingUBX->checksumB;
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-        _debugSerial->print(F("Checksum failed:"));
-        _debugSerial->print(F(" checksumA: "));
-        _debugSerial->print(incomingUBX->checksumA);
-        _debugSerial->print(F(" checksumB: "));
-        _debugSerial->print(incomingUBX->checksumB);
-
-        _debugSerial->print(F(" rollingChecksumA: "));
-        _debugSerial->print(rollingChecksumA);
-        _debugSerial->print(F(" rollingChecksumB: "));
-        _debugSerial->print(rollingChecksumB);
-        _debugSerial->println();
-#endif
+        _debugStream << " rollingChecksumA: ";
+        _debugStream << rollingChecksumA;
+        _debugStream << " rollingChecksumB: ";
+        _debugStream << rollingChecksumB;
+        _debugStream << endl;
       }
     }
 
@@ -3184,19 +2720,18 @@ void SFE_UBLOX_GNSS::processUBX(uint8_t incoming, ubxPacket *incomingUBX, uint8_
   {
     // Something has gone very wrong
     currentSentence = SFE_UBLOX_SENTENCE_TYPE_NONE; // Reset the sentence to being looking for a new start char
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
       if (overrun)
-        _debugSerial->print(F("processUBX: buffer overrun detected!"));
+        _debugStream << "processUBX: buffer overrun detected!";
       else
-        _debugSerial->print(F("processUBX: counter hit maximum_payload_size + 6!"));
-      _debugSerial->print(F(" activePacketBuffer: "));
-      _debugSerial->print(activePacketBuffer);
-      _debugSerial->print(F(" maximum_payload_size: "));
-      _debugSerial->println(maximum_payload_size);
+        _debugStream << "processUBX: counter hit maximum_payload_size + 6!";
+      _debugStream << " activePacketBuffer: ";
+      _debugStream << activePacketBuffer;
+      _debugStream << " maximum_payload_size: ";
+      _debugStream << maximum_payload_size << endl;
     }
-#endif
   }
 
   // Increment the counter
@@ -4359,12 +3894,11 @@ void SFE_UBLOX_GNSS::processUBXpacket(ubxPacket *msg)
         }
         else
         {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
           if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
           {
-            _debugSerial->println(F("processUBXpacket: packetUBXMGAACK is full. ACK will be lost!"));
+            _debugStream << "processUBXpacket: packetUBXMGAACK is full. ACK will be lost!" << endl;
           }
-#endif
         }
       }
     }
@@ -4409,12 +3943,11 @@ void SFE_UBLOX_GNSS::processUBXpacket(ubxPacket *msg)
         }
         else
         {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
           if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
           {
-            _debugSerial->println(F("processUBXpacket: packetUBXMGADBD is full. DBD data will be lost!"));
+            _debugStream << "processUBXpacket: packetUBXMGADBD is full. DBD data will be lost!" << endl;
           }
-#endif
         }
       }
     }
@@ -4576,25 +4109,24 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::sendCommand(ubxPacket *outgoingUBX, uint16_t 
 
   calcChecksum(outgoingUBX); // Sets checksum A and B bytes of the packet
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("\nSending: "));
+    _debugStream << "\nSending: ";
     printPacket(outgoingUBX, true); // Always print payload
   }
-#endif
 
   if (commType == COMM_TYPE_I2C)
   {
-    retVal = sendI2cCommand(outgoingUBX, maxWait);
+    // retVal = sendI2cCommand(outgoingUBX, maxWait);
+    retVal = SFE_UBLOX_STATUS_FAIL;
     if (retVal != SFE_UBLOX_STATUS_SUCCESS)
     {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
       if (_printDebug == true)
       {
-        _debugSerial->println(F("Send I2C Command failed"));
+        _debugStream << "Send I2C Command failed" << endl;
       }
-#endif
+
       return retVal;
     }
   }
@@ -4604,7 +4136,8 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::sendCommand(ubxPacket *outgoingUBX, uint16_t 
   }
   else if (commType == COMM_TYPE_SPI)
   {
-    sendSpiCommand(outgoingUBX);
+    // sendSpiCommand(outgoingUBX);
+    _debugStream << "No longer supported!!" << endl;
   }
 
   if (maxWait > 0)
@@ -4612,172 +4145,33 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::sendCommand(ubxPacket *outgoingUBX, uint16_t 
     // Depending on what we just sent, either we need to look for an ACK or not
     if ((outgoingUBX->cls == UBX_CLASS_CFG) || (expectACKonly == true))
     {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
       if (_printDebug == true)
       {
-        _debugSerial->println(F("sendCommand: Waiting for ACK response"));
+        _debugStream << "sendCommand: Waiting for ACK response" << endl;
       }
-#endif
+
       retVal = waitForACKResponse(outgoingUBX, outgoingUBX->cls, outgoingUBX->id, maxWait); // Wait for Ack response
     }
     else
     {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
       if (_printDebug == true)
       {
-        _debugSerial->println(F("sendCommand: Waiting for No ACK response"));
+        _debugStream << "sendCommand: Waiting for No ACK response" << endl;
       }
-#endif
+
       retVal = waitForNoACKResponse(outgoingUBX, outgoingUBX->cls, outgoingUBX->id, maxWait); // Wait for Ack response
     }
   }
   return retVal;
 }
 
-// Returns false if sensor fails to respond to I2C traffic
-sfe_ublox_status_e SFE_UBLOX_GNSS::sendI2cCommand(ubxPacket *outgoingUBX, uint16_t maxWait)
-{
-  // From the integration guide:
-  // "The receiver does not provide any write access except for writing UBX and NMEA messages to the
-  //  receiver, such as configuration or aiding data. Therefore, the register set mentioned in section Read
-  //  Access is not writeable. Following the start condition from the master, the 7-bit device address and
-  //  the RW bit (which is a logic low for write access) are clocked onto the bus by the master transmitter.
-  //  The receiver answers with an acknowledge (logic low) to indicate that it is responsible for the given
-  //  address. Now, the master can write 2 to N bytes to the receiver, generating a stop condition after the
-  //  last byte being written. The number of data bytes must be at least 2 to properly distinguish from
-  //  the write access to set the address counter in random read accesses."
-  // I take two things from this:
-  // 1) We do not need to write 0xFF to point at register 0xFF. We're already pointing at it.
-  // 2) We must always write at least 2 bytes, otherwise it looks like we are starting to do a read.
-  // Point 2 is important. It means:
-  // * In this function:
-  //     if we do multiple writes (because we're trying to write more than i2cTransactionSize),
-  //     we may need to write one byte less in the penultimate write to ensure we always have two bytes left for the final write.
-  // * In pushRawData:
-  //     if there is one byte to write, or one byte left to write, we need to do the same thing and may need to store a single
-  //     byte until pushRawData is called again.
-  // The next four lines can be commented. We do not need to point at the 0xFF data register
-  //_i2cPort->beginTransmission((uint8_t)_gpsI2Caddress); //There is no register to write to, we just begin writing data bytes
-  //_i2cPort->write(0xFF);
-  // if (_i2cPort->endTransmission(false) != 0)         //Don't release bus
-  //  return (SFE_UBLOX_STATUS_I2C_COMM_FAILURE); //Sensor did not ACK
-
-  // The total number of bytes to be written is: payload len + 8
-  // UBX_SYNCH_1
-  // UBX_SYNCH_2
-  // cls
-  // id
-  // len (MSB)
-  // len (LSB)
-  // < payload >
-  // checksumA
-  // checksumB
-
-  // i2cTransactionSize will be at least 8. We don't need to check for smaller values than that.
-
-  uint16_t bytesToSend = outgoingUBX->len + 8; // How many bytes need to be sent
-  uint16_t bytesSent = 0;                      // How many bytes have been sent
-  uint16_t bytesLeftToSend = bytesToSend;      // How many bytes remain to be sent
-  uint16_t startSpot = 0;                      // Payload pointer
-
-  while (bytesLeftToSend > 0)
-  {
-    uint16_t len = bytesLeftToSend; // How many bytes should we actually write?
-    if (len > i2cTransactionSize)   // Limit len to i2cTransactionSize
-      len = i2cTransactionSize;
-
-    bytesLeftToSend -= len; // Calculate how many bytes will be left after we do this write
-
-    // If bytesLeftToSend is zero, that's OK.
-    // If bytesLeftToSend is >= 2, that's OK.
-    // But if bytesLeftToSend is 1, we need to adjust len to make sure we write at least 2 bytes in the final write
-    if (bytesLeftToSend == 1)
-    {
-      len -= 1;             // Decrement len by 1
-      bytesLeftToSend += 1; // Increment bytesLeftToSend by 1
-    }
-
-    _i2cPort->beginTransmission((uint8_t)_gpsI2Caddress); // Start the transmission
-
-    if (bytesSent == 0) // Is this the first write? If it is, write the header bytes
-    {
-      _i2cPort->write(UBX_SYNCH_1); //μ - oh ublox, you're funny. I will call you micro-blox from now on.
-      _i2cPort->write(UBX_SYNCH_2); // b
-      _i2cPort->write(outgoingUBX->cls);
-      _i2cPort->write(outgoingUBX->id);
-      _i2cPort->write(outgoingUBX->len & 0xFF); // LSB
-      _i2cPort->write(outgoingUBX->len >> 8);   // MSB
-
-      bytesSent += 6;
-
-      uint16_t x = 0;
-      // Write a portion of the payload to the bus.
-      // Keep going until we reach the end of the payload (x == outgoingUBX->len)
-      // or we've sent as many bytes as we can in this transmission (bytesSent == len).
-      for (; (x < outgoingUBX->len) && (bytesSent < len); x++)
-      {
-        _i2cPort->write(outgoingUBX->payload[startSpot + x]);
-        bytesSent++;
-      }
-      startSpot += x;
-
-      // Can we write both checksum bytes?
-      // We can send both bytes now if we have exactly 2 bytes left
-      // to be sent in this transmission (bytesSent == (len - 2)).
-      if (bytesSent == (len - 2))
-      {
-        // Write checksum
-        _i2cPort->write(outgoingUBX->checksumA);
-        _i2cPort->write(outgoingUBX->checksumB);
-        bytesSent += 2;
-      }
-    }
-    else // Keep writing payload bytes. Write the checksum at the right time.
-    {
-      uint16_t x = 0;
-      // Write a portion of the payload to the bus.
-      // Keep going until we've sent as many bytes as we can in this transmission (x == len)
-      // or until we reach the end of the payload ((startSpot + x) == (outgoingUBX->len))
-      for (; (x < len) && ((startSpot + x) < (outgoingUBX->len)); x++)
-      {
-        _i2cPort->write(outgoingUBX->payload[startSpot + x]);
-        bytesSent++;
-      }
-      startSpot += x;
-
-      // Can we write both checksum bytes?
-      // We can send both bytes if we have exactly 2 bytes left to be sent (bytesSent == (bytesToSend - 2))
-      // and if there is room for 2 bytes in this transmission
-      if ((bytesSent == (bytesToSend - 2)) && (x == (len - 2)))
-      {
-        // Write checksum
-        _i2cPort->write(outgoingUBX->checksumA);
-        _i2cPort->write(outgoingUBX->checksumB);
-        bytesSent += 2;
-      }
-    }
-
-    if (bytesSent < bytesToSend) // Do we need to go round the loop again?
-    {
-      if (_i2cPort->endTransmission(_i2cStopRestart) != 0) // Don't release bus unless we have to
-        return (SFE_UBLOX_STATUS_I2C_COMM_FAILURE);        // Sensor did not ACK
-    }
-  }
-
-  // All done transmitting bytes. Release bus.
-  if (_i2cPort->endTransmission() != 0)
-    return (SFE_UBLOX_STATUS_I2C_COMM_FAILURE); // Sensor did not ACK
-
-  (void)maxWait; // Do something with maxWait just to avoid the pesky compiler warnings!
-
-  return (SFE_UBLOX_STATUS_SUCCESS);
-}
-
 // Given a packet and payload, send everything including CRC bytesA via Serial port
 void SFE_UBLOX_GNSS::sendSerialCommand(ubxPacket *outgoingUBX)
 {
   // Write header bytes
-  _serialPort->write(UBX_SYNCH_1); //μ - oh ublox, you're funny. I will call you micro-blox from now on.
+  _serialPort->write(UBX_SYNCH_1); // μ - oh ublox, you're funny. I will call you micro-blox from now on.
   _serialPort->write(UBX_SYNCH_2); // b
   _serialPort->write(outgoingUBX->cls);
   _serialPort->write(outgoingUBX->id);
@@ -4795,94 +4189,6 @@ void SFE_UBLOX_GNSS::sendSerialCommand(ubxPacket *outgoingUBX)
   _serialPort->write(outgoingUBX->checksumB);
 }
 
-// Transfer a byte to SPI. Also capture any bytes received from the UBLOX device during sending and capture them in a small buffer so that
-// they can be processed later with process
-void SFE_UBLOX_GNSS::spiTransfer(uint8_t byteToTransfer)
-{
-  uint8_t returnedByte = _spiPort->transfer(byteToTransfer);
-  if ((spiBufferIndex < getSpiTransactionSize()) && (returnedByte != 0xFF || currentSentence != SFE_UBLOX_SENTENCE_TYPE_NONE))
-  {
-    spiBuffer[spiBufferIndex] = returnedByte;
-    spiBufferIndex++;
-  }
-}
-
-// Send a command via SPI
-void SFE_UBLOX_GNSS::sendSpiCommand(ubxPacket *outgoingUBX)
-{
-  if (spiBuffer == NULL)
-  {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-    {
-      _debugSerial->print(F("sendSpiCommand: no memory allocation for SPI Buffer!"));
-    }
-#endif
-    return;
-  }
-
-  // Start at the beginning of the SPI buffer
-  spiBufferIndex = 0;
-
-  _spiPort->beginTransaction(SPISettings(_spiSpeed, MSBFIRST, SPI_MODE0));
-  digitalWrite(_csPin, LOW);
-  // Write header bytes
-  spiTransfer(UBX_SYNCH_1); //μ - oh ublox, you're funny. I will call you micro-blox from now on.
-  spiTransfer(UBX_SYNCH_2); // b
-
-  spiTransfer(outgoingUBX->cls);
-  spiTransfer(outgoingUBX->id);
-  spiTransfer(outgoingUBX->len & 0xFF); // LSB
-  spiTransfer(outgoingUBX->len >> 8);
-
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-  if (_printDebug)
-  {
-    _debugSerial->print(F("sendSpiCommand: "));
-    _debugSerial->print(UBX_SYNCH_1, HEX);
-    _debugSerial->print(F(" "));
-    _debugSerial->print(UBX_SYNCH_2, HEX);
-    _debugSerial->print(F(" "));
-    _debugSerial->print(outgoingUBX->cls, HEX);
-    _debugSerial->print(F(" "));
-    _debugSerial->print(outgoingUBX->id, HEX);
-    _debugSerial->print(F(" "));
-    _debugSerial->print(outgoingUBX->len & 0xFF, HEX);
-    _debugSerial->print(F(" "));
-    _debugSerial->print(outgoingUBX->len >> 8, HEX);
-  }
-#endif
-
-  // Write payload.
-  for (uint16_t i = 0; i < outgoingUBX->len; i++)
-  {
-    spiTransfer(outgoingUBX->payload[i]);
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-    if (_printDebug)
-    {
-      _debugSerial->print(F(" "));
-      _debugSerial->print(outgoingUBX->payload[i], HEX);
-    }
-#endif
-  }
-
-  // Write checksum
-  spiTransfer(outgoingUBX->checksumA);
-  spiTransfer(outgoingUBX->checksumB);
-  digitalWrite(_csPin, HIGH);
-  _spiPort->endTransaction();
-
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
-  if (_printDebug)
-  {
-    _debugSerial->print(F(" "));
-    _debugSerial->print(outgoingUBX->checksumA, HEX);
-    _debugSerial->print(F(" "));
-    _debugSerial->println(outgoingUBX->checksumB, HEX);
-  }
-#endif
-}
-
 // Pretty prints the current ubxPacket
 void SFE_UBLOX_GNSS::printPacket(ubxPacket *packet, bool alwaysPrintPayload)
 {
@@ -4892,63 +4198,60 @@ void SFE_UBLOX_GNSS::printPacket(ubxPacket *packet, bool alwaysPrintPayload)
   bool printPayload = (ignoreThisPayload == false);
   printPayload |= (alwaysPrintPayload == true);
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("CLS:"));
+    _debugStream << "CLS:";
     if (packet->cls == UBX_CLASS_NAV) // 1
-      _debugSerial->print(F("NAV"));
+      _debugStream << "NAV";
     else if (packet->cls == UBX_CLASS_ACK) // 5
-      _debugSerial->print(F("ACK"));
+      _debugStream << "ACK";
     else if (packet->cls == UBX_CLASS_CFG) // 6
-      _debugSerial->print(F("CFG"));
+      _debugStream << "CFG";
     else if (packet->cls == UBX_CLASS_MON) // 0x0A
-      _debugSerial->print(F("MON"));
+      _debugStream << "MON";
     else
     {
-      _debugSerial->print(F("0x"));
-      _debugSerial->print(packet->cls, HEX);
+      _debugStream << "0x";
+      printHex(_debugStream, packet->cls);
     }
 
-    _debugSerial->print(F(" ID:"));
+    _debugStream << " ID:";
     if (packet->cls == UBX_CLASS_NAV && packet->id == UBX_NAV_PVT)
-      _debugSerial->print(F("PVT"));
+      _debugStream << "PVT";
     else if (packet->cls == UBX_CLASS_CFG && packet->id == UBX_CFG_RATE)
-      _debugSerial->print(F("RATE"));
+      _debugStream << "RATE";
     else if (packet->cls == UBX_CLASS_CFG && packet->id == UBX_CFG_CFG)
-      _debugSerial->print(F("SAVE"));
+      _debugStream << "SAVE";
     else
     {
-      _debugSerial->print(F("0x"));
-      _debugSerial->print(packet->id, HEX);
+      _debugStream << "0x";
+      printHex(_debugStream, packet->id);
     }
 
-    _debugSerial->print(F(" Len: 0x"));
-    _debugSerial->print(packet->len, HEX);
+    _debugStream << " Len: 0x";
+    printHex(_debugStream, packet->len);
 
     if (printPayload)
     {
-      _debugSerial->print(F(" Payload:"));
+      _debugStream << " Payload:";
 
       for (uint16_t x = 0; x < packet->len; x++)
       {
-        _debugSerial->print(F(" "));
-        _debugSerial->print(packet->payload[x], HEX);
+        _debugStream << " ";
+        printHex(_debugStream, packet->payload[x]);
       }
     }
     else
     {
-      _debugSerial->print(F(" Payload: IGNORED"));
+      _debugStream << " Payload: IGNORED";
     }
-    _debugSerial->println();
+    _debugStream << endl;
   }
-#else
   if (_printDebug == true)
   {
-    _debugSerial->print(F("Len: 0x"));
-    _debugSerial->print(packet->len, HEX);
+    _debugStream << "Len: 0x";
+    printHex(_debugStream, packet->len);
   }
-#endif
 }
 
 // When messages from the class CFG are sent to the receiver, the receiver will send an "acknowledge"(UBX - ACK - ACK) or a
@@ -5003,14 +4306,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForACKResponse(ubxPacket *outgoingUBX, ui
       // then we can be confident that the data in outgoingUBX is valid
       if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && (packetAck.classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && (outgoingUBX->valid == SFE_UBLOX_PACKET_VALIDITY_VALID) && (outgoingUBX->cls == requestedClass) && (outgoingUBX->id == requestedID))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForACKResponse: valid data and valid ACK received after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForACKResponse: valid data and valid ACK received after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_DATA_RECEIVED); // We received valid data and a correct ACK!
       }
 
@@ -5021,14 +4324,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForACKResponse(ubxPacket *outgoingUBX, ui
       // as these may have been changed by an automatic packet.
       else if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED) && (packetAck.classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForACKResponse: no data and valid ACK after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForACKResponse: no data and valid ACK after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_DATA_SENT); // We got an ACK but no data...
       }
 
@@ -5041,14 +4344,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForACKResponse(ubxPacket *outgoingUBX, ui
       // Note: the addition of packetBuf should make this check redundant!
       else if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && (packetAck.classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && ((outgoingUBX->cls != requestedClass) || (outgoingUBX->id != requestedID)))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForACKResponse: data being OVERWRITTEN after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForACKResponse: data being OVERWRITTEN after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_DATA_OVERWRITTEN); // Data was valid but has been or is being overwritten
       }
 
@@ -5056,14 +4359,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForACKResponse(ubxPacket *outgoingUBX, ui
       // are NOT_VALID then we can be confident we have had a checksum failure on the data packet
       else if ((packetAck.classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && (outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_NOT_VALID) && (outgoingUBX->valid == SFE_UBLOX_PACKET_VALIDITY_NOT_VALID))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForACKResponse: CRC failed after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForACKResponse: CRC failed after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_CRC_FAIL); // Checksum fail
       }
 
@@ -5076,14 +4379,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForACKResponse(ubxPacket *outgoingUBX, ui
       // Note: the addition of packetBuf changes the logic of this, but we'll leave the code as is for now.
       else if (packetAck.classAndIDmatch == SFE_UBLOX_PACKET_NOTACKNOWLEDGED)
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForACKResponse: data was NOTACKNOWLEDGED (NACK) after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForACKResponse: data was NOTACKNOWLEDGED (NACK) after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_COMMAND_NACK); // We received a NACK!
       }
 
@@ -5092,14 +4395,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForACKResponse(ubxPacket *outgoingUBX, ui
       // If we were playing safe, we should return FAIL instead
       else if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && (packetAck.classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_NOT_VALID) && (outgoingUBX->valid == SFE_UBLOX_PACKET_VALIDITY_VALID) && (outgoingUBX->cls == requestedClass) && (outgoingUBX->id == requestedID))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForACKResponse: VALID data and INVALID ACK received after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForACKResponse: VALID data and INVALID ACK received after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_DATA_RECEIVED); // We received valid data and an invalid ACK!
       }
 
@@ -5107,14 +4410,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForACKResponse(ubxPacket *outgoingUBX, ui
       // then we return a FAIL. This must be a double checksum failure?
       else if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_NOT_VALID) && (packetAck.classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_NOT_VALID))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForACKResponse: INVALID data and INVALID ACK received after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForACKResponse: INVALID data and INVALID ACK received after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_FAIL); // We received invalid data and an invalid ACK!
       }
 
@@ -5124,41 +4427,39 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForACKResponse(ubxPacket *outgoingUBX, ui
       {
         // if (_printDebug == true)
         // {
-        //   _debugSerial->print(F("waitForACKResponse: valid data after "));
-        //   _debugSerial->print(millis() - startTime);
-        //   _debugSerial->println(F(" msec. Waiting for ACK."));
+        //   _debugStream << "waitForACKResponse: valid data after ";
+        //   _debugStream << millis() - startTime;
+        //   _debugStream << " msec. Waiting for ACK." << endl;
         // }
       }
 
     } // checkUbloxInternal == true
 
-    delay(1); // Allow an RTOS to get an elbow in (#11)
-  }           // while (millis() < (startTime + (unsigned long)maxTime))
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  } // while (millis() < (startTime + (unsigned long)maxTime))
 
   // We have timed out...
   // If the outgoingUBX->classAndIDmatch is VALID then we can take a gamble and return DATA_RECEIVED
   // even though we did not get an ACK
   if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && (packetAck.classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED) && (outgoingUBX->valid == SFE_UBLOX_PACKET_VALIDITY_VALID) && (outgoingUBX->cls == requestedClass) && (outgoingUBX->id == requestedID))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->print(F("waitForACKResponse: TIMEOUT with valid data after "));
-      _debugSerial->print(millis() - startTime);
-      _debugSerial->println(F(" msec. "));
+      _debugStream << "waitForACKResponse: TIMEOUT with valid data after ";
+      _debugStream << millis() - startTime;
+      _debugStream << " msec. " << endl;
     }
-#endif
+
     return (SFE_UBLOX_STATUS_DATA_RECEIVED); // We received valid data... But no ACK!
   }
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("waitForACKResponse: TIMEOUT after "));
-    _debugSerial->print(millis() - startTime);
-    _debugSerial->println(F(" msec."));
+    _debugStream << "waitForACKResponse: TIMEOUT after ";
+    _debugStream << millis() - startTime;
+    _debugStream << " msec." << endl;
   }
-#endif
 
   return (SFE_UBLOX_STATUS_TIMEOUT);
 }
@@ -5191,14 +4492,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForNoACKResponse(ubxPacket *outgoingUBX, 
       // then we can be confident that the data in outgoingUBX is valid
       if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && (outgoingUBX->valid == SFE_UBLOX_PACKET_VALIDITY_VALID) && (outgoingUBX->cls == requestedClass) && (outgoingUBX->id == requestedID))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForNoACKResponse: valid data with CLS/ID match after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForNoACKResponse: valid data with CLS/ID match after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_DATA_RECEIVED); // We received valid data!
       }
 
@@ -5211,14 +4512,14 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForNoACKResponse(ubxPacket *outgoingUBX, 
       // Note: the addition of packetBuf should make this check redundant!
       else if ((outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_VALID) && ((outgoingUBX->cls != requestedClass) || (outgoingUBX->id != requestedID)))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForNoACKResponse: data being OVERWRITTEN after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForNoACKResponse: data being OVERWRITTEN after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_DATA_OVERWRITTEN); // Data was valid but has been or is being overwritten
       }
 
@@ -5228,41 +4529,39 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::waitForNoACKResponse(ubxPacket *outgoingUBX, 
       {
         // if (_printDebug == true)
         // {
-        //   _debugSerial->print(F("waitForNoACKResponse: valid but UNWANTED data after "));
-        //   _debugSerial->print(millis() - startTime);
-        //   _debugSerial->print(F(" msec. Class: "));
-        //   _debugSerial->print(outgoingUBX->cls);
-        //   _debugSerial->print(F(" ID: "));
-        //   _debugSerial->print(outgoingUBX->id);
+        //   _debugStream << "waitForNoACKResponse: valid but UNWANTED data after ";
+        //   _debugStream << millis() - startTime;
+        //   _debugStream << " msec. Class: ";
+        //   _debugStream << outgoingUBX->cls;
+        //   _debugStream << " ID: ";
+        //   _debugStream << outgoingUBX->id;
         // }
       }
 
       // If the outgoingUBX->classAndIDmatch is NOT_VALID then we return CRC failure
       else if (outgoingUBX->classAndIDmatch == SFE_UBLOX_PACKET_VALIDITY_NOT_VALID)
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if (_printDebug == true)
         {
-          _debugSerial->print(F("waitForNoACKResponse: CLS/ID match but failed CRC after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" msec"));
+          _debugStream << "waitForNoACKResponse: CLS/ID match but failed CRC after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " msec" << endl;
         }
-#endif
+
         return (SFE_UBLOX_STATUS_CRC_FAIL); // We received invalid data
       }
     }
 
-    delay(1); // Allow an RTOS to get an elbow in (#11)
+    std::this_thread::sleep_for(std::chrono::seconds(1)); // Allow an RTOS to get an elbow in (#11)
   }
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("waitForNoACKResponse: TIMEOUT after "));
-    _debugSerial->print(millis() - startTime);
-    _debugSerial->println(F(" msec. No packet received."));
+    _debugStream << "waitForNoACKResponse: TIMEOUT after ";
+    _debugStream << millis() - startTime;
+    _debugStream << " msec. No packet received." << endl;
   }
-#endif
 
   return (SFE_UBLOX_STATUS_TIMEOUT);
 }
@@ -5282,13 +4581,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVPOSECEF->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV POSECEF"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV POSECEF" << endl;
       packetUBXNAVPOSECEF->callbackPointer(*packetUBXNAVPOSECEF->callbackData); // Call the callback
     }
     if (packetUBXNAVPOSECEF->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV POSECEF"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV POSECEF" << endl;
       packetUBXNAVPOSECEF->callbackPointerPtr(packetUBXNAVPOSECEF->callbackData); // Call the callback
     }
     packetUBXNAVPOSECEF->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5301,13 +4600,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVSTATUS->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV STATUS"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV STATUS" << endl;
       packetUBXNAVSTATUS->callbackPointer(*packetUBXNAVSTATUS->callbackData); // Call the callback
     }
     if (packetUBXNAVSTATUS->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV STATUS"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV STATUS" << endl;
       packetUBXNAVSTATUS->callbackPointerPtr(packetUBXNAVSTATUS->callbackData); // Call the callback
     }
     packetUBXNAVSTATUS->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5320,13 +4619,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVDOP->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV DOP"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV DOP" << endl;
       packetUBXNAVDOP->callbackPointer(*packetUBXNAVDOP->callbackData); // Call the callback
     }
     if (packetUBXNAVDOP->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV DOP"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV DOP" << endl;
       packetUBXNAVDOP->callbackPointerPtr(packetUBXNAVDOP->callbackData); // Call the callback
     }
     packetUBXNAVDOP->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5339,13 +4638,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVATT->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV ATT"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV ATT" << endl;
       packetUBXNAVATT->callbackPointer(*packetUBXNAVATT->callbackData); // Call the callback
     }
     if (packetUBXNAVATT->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV ATT"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV ATT" << endl;
       packetUBXNAVATT->callbackPointerPtr(packetUBXNAVATT->callbackData); // Call the callback
     }
     packetUBXNAVATT->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5358,13 +4657,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVPVT->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV PVT"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV PVT" << endl;
       packetUBXNAVPVT->callbackPointer(*packetUBXNAVPVT->callbackData); // Call the callback
     }
     if (packetUBXNAVPVT->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV PVT"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV PVT" << endl;
       packetUBXNAVPVT->callbackPointerPtr(packetUBXNAVPVT->callbackData); // Call the callback
     }
     packetUBXNAVPVT->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5377,13 +4676,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVODO->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV ODO"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV ODO" << endl;
       packetUBXNAVODO->callbackPointer(*packetUBXNAVODO->callbackData); // Call the callback
     }
     if (packetUBXNAVODO->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV ODO"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV ODO" << endl;
       packetUBXNAVODO->callbackPointerPtr(packetUBXNAVODO->callbackData); // Call the callback
     }
     packetUBXNAVODO->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5396,13 +4695,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVVELECEF->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV VELECEF"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV VELECEF" << endl;
       packetUBXNAVVELECEF->callbackPointer(*packetUBXNAVVELECEF->callbackData); // Call the callback
     }
     if (packetUBXNAVVELECEF->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV VELECEF"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV VELECEF" << endl;
       packetUBXNAVVELECEF->callbackPointerPtr(packetUBXNAVVELECEF->callbackData); // Call the callback
     }
     packetUBXNAVVELECEF->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5415,13 +4714,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVVELNED->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV VELNED"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV VELNED" << endl;
       packetUBXNAVVELNED->callbackPointer(*packetUBXNAVVELNED->callbackData); // Call the callback
     }
     if (packetUBXNAVVELNED->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV VELNED"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV VELNED" << endl;
       packetUBXNAVVELNED->callbackPointerPtr(packetUBXNAVVELNED->callbackData); // Call the callback
     }
     packetUBXNAVVELNED->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5434,13 +4733,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVHPPOSECEF->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV HPPOSECEF"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV HPPOSECEF" << endl;
       packetUBXNAVHPPOSECEF->callbackPointer(*packetUBXNAVHPPOSECEF->callbackData); // Call the callback
     }
     if (packetUBXNAVHPPOSECEF->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV HPPOSECEF"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV HPPOSECEF" << endl;
       packetUBXNAVHPPOSECEF->callbackPointerPtr(packetUBXNAVHPPOSECEF->callbackData); // Call the callback
     }
     packetUBXNAVHPPOSECEF->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5453,13 +4752,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVHPPOSLLH->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV HPPOSLLH"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV HPPOSLLH" << endl;
       packetUBXNAVHPPOSLLH->callbackPointer(*packetUBXNAVHPPOSLLH->callbackData); // Call the callback
     }
     if (packetUBXNAVHPPOSLLH->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV HPPOSLLH"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV HPPOSLLH" << endl;
       packetUBXNAVHPPOSLLH->callbackPointerPtr(packetUBXNAVHPPOSLLH->callbackData); // Call the callback
     }
     packetUBXNAVHPPOSLLH->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5472,13 +4771,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVPVAT->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV PVAT"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV PVAT" << endl;
       packetUBXNAVPVAT->callbackPointer(*packetUBXNAVPVAT->callbackData); // Call the callback
     }
     if (packetUBXNAVPVAT->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV PVAT"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV PVAT" << endl;
       packetUBXNAVPVAT->callbackPointerPtr(packetUBXNAVPVAT->callbackData); // Call the callback
     }
     packetUBXNAVPVAT->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5491,7 +4790,7 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVTIMEUTC->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV TIMEUTC"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV TIMEUTC" << endl;
       packetUBXNAVTIMEUTC->callbackPointerPtr(packetUBXNAVTIMEUTC->callbackData); // Call the callback
     }
     packetUBXNAVTIMEUTC->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5504,13 +4803,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVCLOCK->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV CLOCK"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV CLOCK" << endl;
       packetUBXNAVCLOCK->callbackPointer(*packetUBXNAVCLOCK->callbackData); // Call the callback
     }
     if (packetUBXNAVCLOCK->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV CLOCK"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV CLOCK" << endl;
       packetUBXNAVCLOCK->callbackPointerPtr(packetUBXNAVCLOCK->callbackData); // Call the callback
     }
     packetUBXNAVCLOCK->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5523,7 +4822,7 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVSVIN->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV SVIN"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV SVIN" << endl;
       packetUBXNAVSVIN->callbackPointerPtr(packetUBXNAVSVIN->callbackData); // Call the callback
     }
     packetUBXNAVSVIN->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5536,13 +4835,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVSAT->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV SAT"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV SAT" << endl;
       packetUBXNAVSAT->callbackPointer(*packetUBXNAVSAT->callbackData); // Call the callback
     }
     if (packetUBXNAVSAT->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV SAT"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV SAT" << endl;
       packetUBXNAVSAT->callbackPointerPtr(packetUBXNAVSAT->callbackData); // Call the callback
     }
     packetUBXNAVSAT->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5555,13 +4854,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVRELPOSNED->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV RELPOSNED"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV RELPOSNED" << endl;
       packetUBXNAVRELPOSNED->callbackPointer(*packetUBXNAVRELPOSNED->callbackData); // Call the callback
     }
     if (packetUBXNAVRELPOSNED->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV RELPOSNED"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV RELPOSNED" << endl;
       packetUBXNAVRELPOSNED->callbackPointerPtr(packetUBXNAVRELPOSNED->callbackData); // Call the callback
     }
     packetUBXNAVRELPOSNED->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5574,13 +4873,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVAOPSTATUS->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for NAV AOPSTATUS"));
+      //   _debugStream << "checkCallbacks: calling callback for NAV AOPSTATUS" << endl;
       packetUBXNAVAOPSTATUS->callbackPointer(*packetUBXNAVAOPSTATUS->callbackData); // Call the callback
     }
     if (packetUBXNAVAOPSTATUS->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV AOPSTATUS"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV AOPSTATUS" << endl;
       packetUBXNAVAOPSTATUS->callbackPointerPtr(packetUBXNAVAOPSTATUS->callbackData); // Call the callback
     }
     packetUBXNAVAOPSTATUS->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5593,7 +4892,7 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXNAVEOE->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for NAV EOE"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for NAV EOE" << endl;
       packetUBXNAVEOE->callbackPointerPtr(packetUBXNAVEOE->callbackData); // Call the callback
     }
     packetUBXNAVEOE->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5605,7 +4904,7 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
       && (packetUBXRXMPMP->automaticFlags.flags.bits.callbackCopyValid == true)) // If the copy of the data is valid
   {
     // if (_printDebug == true)
-    //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for RXM PMP"));
+    //   _debugStream << "checkCallbacks: calling callbackPtr for RXM PMP" << endl;
     packetUBXRXMPMP->callbackPointerPtr(packetUBXRXMPMP->callbackData);   // Call the callback
     packetUBXRXMPMP->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
   }
@@ -5616,7 +4915,7 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
       && (packetUBXRXMPMPmessage->automaticFlags.flags.bits.callbackCopyValid == true)) // If the copy of the data is valid
   {
     // if (_printDebug == true)
-    //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for RXM PMP message"));
+    //   _debugStream << "checkCallbacks: calling callbackPtr for RXM PMP message" << endl;
     packetUBXRXMPMPmessage->callbackPointerPtr(packetUBXRXMPMPmessage->callbackData); // Call the callback
     packetUBXRXMPMPmessage->automaticFlags.flags.bits.callbackCopyValid = false;      // Mark the data as stale
   }
@@ -5641,7 +4940,7 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
       && (packetUBXRXMCOR->automaticFlags.flags.bits.callbackCopyValid == true)) // If the copy of the data is valid
   {
     // if (_printDebug == true)
-    //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for RXM COR"));
+    //   _debugStream << "checkCallbacks: calling callbackPtr for RXM COR" << endl;
     packetUBXRXMCOR->callbackPointerPtr(packetUBXRXMCOR->callbackData);   // Call the callback
     packetUBXRXMCOR->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
   }
@@ -5653,13 +4952,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXRXMSFRBX->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for RXM SFRBX"));
+      //   _debugStream << "checkCallbacks: calling callback for RXM SFRBX" << endl;
       packetUBXRXMSFRBX->callbackPointer(*packetUBXRXMSFRBX->callbackData); // Call the callback
     }
     if (packetUBXRXMSFRBX->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for RXM SFRBX"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for RXM SFRBX" << endl;
       packetUBXRXMSFRBX->callbackPointerPtr(packetUBXRXMSFRBX->callbackData); // Call the callback
     }
     packetUBXRXMSFRBX->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5672,13 +4971,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXRXMRAWX->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for RXM RAWX"));
+      //   _debugStream << "checkCallbacks: calling callback for RXM RAWX" << endl;
       packetUBXRXMRAWX->callbackPointer(*packetUBXRXMRAWX->callbackData); // Call the callback
     }
     if (packetUBXRXMRAWX->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for RXM RAWX"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for RXM RAWX" << endl;
       packetUBXRXMRAWX->callbackPointerPtr(packetUBXRXMRAWX->callbackData); // Call the callback
     }
     packetUBXRXMRAWX->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5691,13 +4990,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXTIMTM2->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for TIM TM2"));
+      //   _debugStream << "checkCallbacks: calling callback for TIM TM2" << endl;
       packetUBXTIMTM2->callbackPointer(*packetUBXTIMTM2->callbackData); // Call the callback
     }
     if (packetUBXTIMTM2->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for TIM TM2"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for TIM TM2" << endl;
       packetUBXTIMTM2->callbackPointerPtr(packetUBXTIMTM2->callbackData); // Call the callback
     }
     packetUBXTIMTM2->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5710,13 +5009,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXESFALG->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for ESF ALG"));
+      //   _debugStream << "checkCallbacks: calling callback for ESF ALG" << endl;
       packetUBXESFALG->callbackPointer(*packetUBXESFALG->callbackData); // Call the callback
     }
     if (packetUBXESFALG->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for ESF ALG"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for ESF ALG" << endl;
       packetUBXESFALG->callbackPointerPtr(packetUBXESFALG->callbackData); // Call the callback
     }
     packetUBXESFALG->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5729,13 +5028,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXESFINS->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for ESF INS"));
+      //   _debugStream << "checkCallbacks: calling callback for ESF INS" << endl;
       packetUBXESFINS->callbackPointer(*packetUBXESFINS->callbackData); // Call the callback
     }
     if (packetUBXESFINS->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for ESF INS"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for ESF INS" << endl;
       packetUBXESFINS->callbackPointerPtr(packetUBXESFINS->callbackData); // Call the callback
     }
     packetUBXESFINS->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5748,13 +5047,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXESFMEAS->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for ESF MEAS"));
+      //   _debugStream << "checkCallbacks: calling callback for ESF MEAS" << endl;
       packetUBXESFMEAS->callbackPointer(*packetUBXESFMEAS->callbackData); // Call the callback
     }
     if (packetUBXESFMEAS->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for ESF MEAS"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for ESF MEAS" << endl;
       packetUBXESFMEAS->callbackPointerPtr(packetUBXESFMEAS->callbackData); // Call the callback
     }
     packetUBXESFMEAS->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5767,13 +5066,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXESFRAW->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for ESF RAW"));
+      //   _debugStream << "checkCallbacks: calling callback for ESF RAW" << endl;
       packetUBXESFRAW->callbackPointer(*packetUBXESFRAW->callbackData); // Call the callback
     }
     if (packetUBXESFRAW->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for ESF RAW"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for ESF RAW" << endl;
       packetUBXESFRAW->callbackPointerPtr(packetUBXESFRAW->callbackData); // Call the callback
     }
     packetUBXESFRAW->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5786,13 +5085,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXESFSTATUS->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for ESF STATUS"));
+      //   _debugStream << "checkCallbacks: calling callback for ESF STATUS" << endl;
       packetUBXESFSTATUS->callbackPointer(*packetUBXESFSTATUS->callbackData); // Call the callback
     }
     if (packetUBXESFSTATUS->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for ESF STATUS"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for ESF STATUS" << endl;
       packetUBXESFSTATUS->callbackPointerPtr(packetUBXESFSTATUS->callbackData); // Call the callback
     }
     packetUBXESFSTATUS->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5805,13 +5104,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXHNRATT->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for HNR ATT"));
+      //   _debugStream << "checkCallbacks: calling callback for HNR ATT" << endl;
       packetUBXHNRATT->callbackPointer(*packetUBXHNRATT->callbackData); // Call the callback
     }
     if (packetUBXHNRATT->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for HNR ATT"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for HNR ATT" << endl;
       packetUBXHNRATT->callbackPointerPtr(packetUBXHNRATT->callbackData); // Call the callback
     }
     packetUBXHNRATT->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5824,13 +5123,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXHNRINS->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for HNR INS"));
+      //   _debugStream << "checkCallbacks: calling callback for HNR INS" << endl;
       packetUBXHNRINS->callbackPointer(*packetUBXHNRINS->callbackData); // Call the callback
     }
     if (packetUBXHNRINS->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for HNR INS"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for HNR INS" << endl;
       packetUBXHNRINS->callbackPointerPtr(packetUBXHNRINS->callbackData); // Call the callback
     }
     packetUBXHNRINS->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5843,13 +5142,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (packetUBXHNRPVT->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for HNR PVT"));
+      //   _debugStream << "checkCallbacks: calling callback for HNR PVT" << endl;
       packetUBXHNRPVT->callbackPointer(*packetUBXHNRPVT->callbackData); // Call the callback
     }
     if (packetUBXHNRPVT->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for HNR PVT"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for HNR PVT" << endl;
       packetUBXHNRPVT->callbackPointerPtr(packetUBXHNRPVT->callbackData); // Call the callback
     }
     packetUBXHNRPVT->automaticFlags.flags.bits.callbackCopyValid = false; // Mark the data as stale
@@ -5863,13 +5162,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (storageNMEAGPGGA->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for GPGGA"));
+      //   _debugStream << "checkCallbacks: calling callback for GPGGA" << endl;
       storageNMEAGPGGA->callbackPointer(*storageNMEAGPGGA->callbackCopy); // Call the callback
     }
     if (storageNMEAGPGGA->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for GPGGA"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for GPGGA" << endl;
       storageNMEAGPGGA->callbackPointerPtr(storageNMEAGPGGA->callbackCopy); // Call the callback
     }
     storageNMEAGPGGA->automaticFlags.flags.bits.callbackCopyValid = 0; // Mark the data as stale
@@ -5882,13 +5181,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (storageNMEAGNGGA->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for GNGGA"));
+      //   _debugStream << "checkCallbacks: calling callback for GNGGA" << endl;
       storageNMEAGNGGA->callbackPointer(*storageNMEAGNGGA->callbackCopy); // Call the callback
     }
     if (storageNMEAGNGGA->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for GNGGA"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for GNGGA" << endl;
       storageNMEAGNGGA->callbackPointerPtr(storageNMEAGNGGA->callbackCopy); // Call the callback
     }
     storageNMEAGNGGA->automaticFlags.flags.bits.callbackCopyValid = 0; // Mark the data as stale
@@ -5901,13 +5200,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (storageNMEAGPVTG->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for GPVTG"));
+      //   _debugStream << "checkCallbacks: calling callback for GPVTG" << endl;
       storageNMEAGPVTG->callbackPointer(*storageNMEAGPVTG->callbackCopy); // Call the callback
     }
     if (storageNMEAGPVTG->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for GPVTG"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for GPVTG" << endl;
       storageNMEAGPVTG->callbackPointerPtr(storageNMEAGPVTG->callbackCopy); // Call the callback
     }
     storageNMEAGPVTG->automaticFlags.flags.bits.callbackCopyValid = 0; // Mark the data as stale
@@ -5920,13 +5219,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (storageNMEAGNVTG->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for GNVTG"));
+      //   _debugStream << "checkCallbacks: calling callback for GNVTG" << endl;
       storageNMEAGNVTG->callbackPointer(*storageNMEAGNVTG->callbackCopy); // Call the callback
     }
     if (storageNMEAGNVTG->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for GNVTG"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for GNVTG" << endl;
       storageNMEAGNVTG->callbackPointerPtr(storageNMEAGNVTG->callbackCopy); // Call the callback
     }
     storageNMEAGNVTG->automaticFlags.flags.bits.callbackCopyValid = 0; // Mark the data as stale
@@ -5939,13 +5238,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (storageNMEAGPRMC->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for GPRMC"));
+      //   _debugStream << "checkCallbacks: calling callback for GPRMC" << endl;
       storageNMEAGPRMC->callbackPointer(*storageNMEAGPRMC->callbackCopy); // Call the callback
     }
     if (storageNMEAGPRMC->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for GPRMC"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for GPRMC" << endl;
       storageNMEAGPRMC->callbackPointerPtr(storageNMEAGPRMC->callbackCopy); // Call the callback
     }
     storageNMEAGPRMC->automaticFlags.flags.bits.callbackCopyValid = 0; // Mark the data as stale
@@ -5958,13 +5257,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (storageNMEAGNRMC->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for GNRMC"));
+      //   _debugStream << "checkCallbacks: calling callback for GNRMC" << endl;
       storageNMEAGNRMC->callbackPointer(*storageNMEAGNRMC->callbackCopy); // Call the callback
     }
     if (storageNMEAGNRMC->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for GNRMC"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for GNRMC" << endl;
       storageNMEAGNRMC->callbackPointerPtr(storageNMEAGNRMC->callbackCopy); // Call the callback
     }
     storageNMEAGNRMC->automaticFlags.flags.bits.callbackCopyValid = 0; // Mark the data as stale
@@ -5977,13 +5276,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (storageNMEAGPZDA->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for GPZDA"));
+      //   _debugStream << "checkCallbacks: calling callback for GPZDA" << endl;
       storageNMEAGPZDA->callbackPointer(*storageNMEAGPZDA->callbackCopy); // Call the callback
     }
     if (storageNMEAGPZDA->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for GPZDA"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for GPZDA" << endl;
       storageNMEAGPZDA->callbackPointerPtr(storageNMEAGPZDA->callbackCopy); // Call the callback
     }
     storageNMEAGPZDA->automaticFlags.flags.bits.callbackCopyValid = 0; // Mark the data as stale
@@ -5996,13 +5295,13 @@ void SFE_UBLOX_GNSS::checkCallbacks(void)
     if (storageNMEAGNZDA->callbackPointer != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callback for GNZDA"));
+      //   _debugStream << "checkCallbacks: calling callback for GNZDA" << endl;
       storageNMEAGNZDA->callbackPointer(*storageNMEAGNZDA->callbackCopy); // Call the callback
     }
     if (storageNMEAGNZDA->callbackPointerPtr != NULL) // If the pointer to the callback has been defined
     {
       // if (_printDebug == true)
-      //   _debugSerial->println(F("checkCallbacks: calling callbackPtr for GNZDA"));
+      //   _debugStream << "checkCallbacks: calling callbackPtr for GNZDA" << endl;
       storageNMEAGNZDA->callbackPointerPtr(storageNMEAGNZDA->callbackCopy); // Call the callback
     }
     storageNMEAGNZDA->automaticFlags.flags.bits.callbackCopyValid = 0; // Mark the data as stale
@@ -6031,88 +5330,17 @@ bool SFE_UBLOX_GNSS::pushRawData(uint8_t *dataBytes, size_t numDataBytes, bool s
   }
   else if (commType == COMM_TYPE_I2C)
   {
-    // We can not write a single data byte to I2C as it would look like the address of a random read.
-    // If numDataBytes is 1, we should probably just reject the data and return false.
-    // But we'll be nice and store the byte until the next time pushRawData is called.
-    if ((numDataBytes == 1) && (_pushSingleByte == false))
-    {
-      _pushThisSingleByte = *dataBytes;
-      _pushSingleByte = true;
-      return (false); // Indicate to the user that their data has not been pushed yet
-    }
-
-    // If stop is true then always use a stop
-    // Else if _i2cStopRestart is true then always use a stop
-    // Else use a restart where needed
-    if (stop == true)
-      stop = true; // Redundant - but makes it clear what is happening
-    else if (_i2cStopRestart == true)
-      stop = true;
-    else
-      stop = false; // Use a restart
-
-    // I2C: split the data up into packets of i2cTransactionSize
-    size_t bytesLeftToWrite = numDataBytes;
-    size_t bytesWrittenTotal = 0;
-
-    if (_pushSingleByte == true) // Increment bytesLeftToWrite if we have a single byte waiting to be pushed
-      bytesLeftToWrite++;
-
-    while (bytesLeftToWrite > 0)
-    {
-      size_t bytesToWrite; // Limit bytesToWrite to i2cTransactionSize
-      if (bytesLeftToWrite > i2cTransactionSize)
-        bytesToWrite = i2cTransactionSize;
-      else
-        bytesToWrite = bytesLeftToWrite;
-
-      // If there would be one byte left to be written next time, send one byte less now
-      if ((bytesLeftToWrite - bytesToWrite) == 1)
-        bytesToWrite--;
-
-      _i2cPort->beginTransmission(_gpsI2Caddress);
-
-      size_t bytesWritten = 0;
-
-      // If _pushSingleByte is true, push it now
-      if (_pushSingleByte == true)
-      {
-        bytesWritten += _i2cPort->write(_pushThisSingleByte);         // Write the single byte
-        bytesWritten += _i2cPort->write(dataBytes, bytesToWrite - 1); // Write the bytes - but send one byte less
-        dataBytes += bytesToWrite - 1;                                // Point to fresh data
-        _pushSingleByte = false;                                      // Clear the flag
-      }
-      else
-      {
-        bytesWritten += _i2cPort->write(dataBytes, bytesToWrite); // Write the bytes
-        dataBytes += bytesToWrite;                                // Point to fresh data
-      }
-
-      bytesWrittenTotal += bytesWritten; // Update the totals
-      bytesLeftToWrite -= bytesToWrite;
-
-      if (bytesLeftToWrite > 0)
-      {
-        if (_i2cPort->endTransmission(stop) != 0) // Send a restart or stop command
-          return (false);                         // Sensor did not ACK
-      }
-      else
-      {
-        if (_i2cPort->endTransmission() != 0) // We're done. Release bus. Always use a stop here
-          return (false);                     // Sensor did not ACK
-      }
-    }
-
-    return (bytesWrittenTotal == numDataBytes); // Return true if the correct number of bytes were written
+    _debugStream << "pushRawData: I2C not currently supported" << endl;
+    return (false);
   }
   else // SPI
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("pushRawData: SPI not currently supported"));
+      _debugStream << "pushRawData: SPI not currently supported" << endl;
     }
-#endif
+
     return (false);
   }
 }
@@ -6123,7 +5351,7 @@ bool SFE_UBLOX_GNSS::pushRawData(uint8_t *dataBytes, size_t numDataBytes, bool s
 // Return how many bytes were pushed successfully.
 // If skipTime is true, any UBX-MGA-INI-TIME_UTC or UBX-MGA-INI-TIME_GNSS packets found in the data will be skipped,
 // allowing the user to override with their own time data with setUTCTimeAssistance.
-size_t SFE_UBLOX_GNSS::pushAssistNowData(const String &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck, uint16_t maxWait)
+size_t SFE_UBLOX_GNSS::pushAssistNowData(const string &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck, uint16_t maxWait)
 {
   return (pushAssistNowDataInternal(0, false, (const uint8_t *)dataBytes.c_str(), numDataBytes, mgaAck, maxWait));
 }
@@ -6131,7 +5359,7 @@ size_t SFE_UBLOX_GNSS::pushAssistNowData(const uint8_t *dataBytes, size_t numDat
 {
   return (pushAssistNowDataInternal(0, false, dataBytes, numDataBytes, mgaAck, maxWait));
 }
-size_t SFE_UBLOX_GNSS::pushAssistNowData(bool skipTime, const String &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck, uint16_t maxWait)
+size_t SFE_UBLOX_GNSS::pushAssistNowData(bool skipTime, const string &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck, uint16_t maxWait)
 {
   return (pushAssistNowDataInternal(0, skipTime, (const uint8_t *)dataBytes.c_str(), numDataBytes, mgaAck, maxWait));
 }
@@ -6139,7 +5367,7 @@ size_t SFE_UBLOX_GNSS::pushAssistNowData(bool skipTime, const uint8_t *dataBytes
 {
   return (pushAssistNowDataInternal(0, skipTime, dataBytes, numDataBytes, mgaAck, maxWait));
 }
-size_t SFE_UBLOX_GNSS::pushAssistNowData(size_t offset, bool skipTime, const String &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck, uint16_t maxWait)
+size_t SFE_UBLOX_GNSS::pushAssistNowData(size_t offset, bool skipTime, const string &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck, uint16_t maxWait)
 {
   return (pushAssistNowDataInternal(offset, skipTime, (const uint8_t *)dataBytes.c_str(), numDataBytes, mgaAck, maxWait));
 }
@@ -6162,13 +5390,11 @@ size_t SFE_UBLOX_GNSS::pushAssistNowDataInternal(size_t offset, bool skipTime, c
     if (ackAiding == 1)
       checkForAcks = true;
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->print(F("pushAssistNowData: mgaAck is ENQUIRE. getAckAiding returned "));
-      _debugSerial->println(ackAiding);
+      _debugStream << "pushAssistNowData: mgaAck is ENQUIRE. getAckAiding returned ";
+      _debugStream << ackAiding << endl;
     }
-#endif
   }
 
   // If checkForAcks is true, then we need to set up storage for the UBX-MGA-ACK-DATA0 messages
@@ -6213,15 +5439,14 @@ size_t SFE_UBLOX_GNSS::pushAssistNowDataInternal(size_t offset, bool skipTime, c
       // Check if this is time assistance data which should be skipped
       if ((skipTime) && ((*(dataBytes + dataPtr + 3) == UBX_MGA_INI_TIME_UTC) || (*(dataBytes + dataPtr + 3) == UBX_MGA_INI_TIME_GNSS)))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
         {
-          _debugSerial->print(F("pushAssistNowData: skipped INI_TIME ID 0x"));
+          _debugStream << "pushAssistNowData: skipped INI_TIME ID 0x";
           if (*(dataBytes + dataPtr + 3) < 0x10)
-            _debugSerial->print(F("0"));
-          _debugSerial->println(*(dataBytes + dataPtr + 3), HEX);
+            _debugStream << "0";
+          printHexLn(_debugStream, *(dataBytes + dataPtr + 3));
         }
-#endif
       }
       else
       {
@@ -6232,12 +5457,12 @@ size_t SFE_UBLOX_GNSS::pushAssistNowDataInternal(size_t offset, bool skipTime, c
 
         if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
         {
-          _debugSerial->print(F("pushAssistNowData: packet ID 0x"));
+          _debugStream << "pushAssistNowData: packet ID 0x";
           if (*(dataBytes + dataPtr + 3) < 0x10)
-            _debugSerial->print(F("0"));
-          _debugSerial->print(*(dataBytes + dataPtr + 3), HEX);
-          _debugSerial->print(F(" length "));
-          _debugSerial->println(packetLength);
+            _debugStream << "0";
+          printHex(_debugStream, *(dataBytes + dataPtr + 3));
+          _debugStream << " length ";
+          _debugStream << packetLength << endl;
         }
 
         if (checkForAcks)
@@ -6260,25 +5485,24 @@ size_t SFE_UBLOX_GNSS::pushAssistNowDataInternal(size_t offset, bool skipTime, c
               {
                 if ((packetUBXMGAACK->data[packetUBXMGAACK->tail].type == (uint8_t)1) && (packetUBXMGAACK->data[packetUBXMGAACK->tail].infoCode == (uint8_t)SFE_UBLOX_MGA_ACK_INFOCODE_ACCEPTED))
                 {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
                   if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
                   {
-                    _debugSerial->print(F("pushAssistNowData: packet was accepted after "));
-                    _debugSerial->print(millis() - startTime);
-                    _debugSerial->println(F(" ms"));
+                    _debugStream << "pushAssistNowData: packet was accepted after ";
+                    _debugStream << millis() - startTime;
+                    _debugStream << " ms" << endl;
                   }
-#endif
+
                   packetsProcessed++;
                 }
                 else
                 {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
                   if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
                   {
-                    _debugSerial->print(F("pushAssistNowData: packet was _not_ accepted. infoCode is "));
-                    _debugSerial->println(packetUBXMGAACK->data[packetUBXMGAACK->tail].infoCode);
+                    _debugStream << "pushAssistNowData: packet was _not_ accepted. infoCode is ";
+                    _debugStream << packetUBXMGAACK->data[packetUBXMGAACK->tail].infoCode << endl;
                   }
-#endif
                 }
                 keepGoing = false;
               }
@@ -6290,12 +5514,11 @@ size_t SFE_UBLOX_GNSS::pushAssistNowDataInternal(size_t offset, bool skipTime, c
           }
           if (keepGoing) // If keepGoing is still true, we must have timed out
           {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
             if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
             {
-              _debugSerial->println(F("pushAssistNowData: packet ack timed out!"));
+              _debugStream << "pushAssistNowData: packet ack timed out!" << endl;
             }
-#endif
           }
         }
         else
@@ -6305,7 +5528,7 @@ size_t SFE_UBLOX_GNSS::pushAssistNowDataInternal(size_t offset, bool skipTime, c
           // We are not checking for Acks, so delay for maxWait millis unless we've reached the end of the data
           if ((dataPtr + packetLength + ((size_t)8)) < (offset + numDataBytes))
           {
-            delay(maxWait);
+            std::this_thread::sleep_for(std::chrono::milliseconds(maxWait)); // Wait max(maxWait);
           }
         }
       }
@@ -6315,14 +5538,12 @@ size_t SFE_UBLOX_GNSS::pushAssistNowDataInternal(size_t offset, bool skipTime, c
     else
     {
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
       // The data was invalid. Send a debug message and then try to find the next 0xB5
       if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
       {
-        _debugSerial->print(F("pushAssistNowData: bad data - ignored! dataPtr is "));
-        _debugSerial->println(dataPtr);
+        _debugStream << "pushAssistNowData: bad data - ignored! dataPtr is ";
+        _debugStream << dataPtr << endl;
       }
-#endif
 
       while ((dataPtr < (offset + numDataBytes)) && (*(dataBytes + ++dataPtr) != UBX_SYNCH_1))
       {
@@ -6331,13 +5552,11 @@ size_t SFE_UBLOX_GNSS::pushAssistNowDataInternal(size_t offset, bool skipTime, c
     }
   }
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
   {
-    _debugSerial->print(F("pushAssistNowData: packetsProcessed: "));
-    _debugSerial->println(packetsProcessed);
+    _debugStream << "pushAssistNowData: packetsProcessed: ";
+    _debugStream << packetsProcessed << endl;
   }
-#endif
 
   return (bytesPushed); // Return the number of valid bytes successfully pushed
 }
@@ -6348,10 +5567,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXMGAACK()
   packetUBXMGAACK = new UBX_MGA_ACK_DATA0_t; // Allocate RAM for the main struct
   if (packetUBXMGAACK == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXMGAACK: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXMGAACK: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXMGAACK->head = 0; // Initialize the ring buffer pointers
@@ -6520,7 +5739,7 @@ bool SFE_UBLOX_GNSS::setPositionAssistanceLLH(int32_t lat, int32_t lon, int32_t 
 // The daysIntoFture parameter makes it easy to get the data for (e.g.) tomorrow based on today's date
 // Returns numDataBytes if unsuccessful
 // TO DO: enhance this so it will find the nearest data for the chosen day - instead of an exact match
-size_t SFE_UBLOX_GNSS::findMGAANOForDate(const String &dataBytes, size_t numDataBytes, uint16_t year, uint8_t month, uint8_t day, uint8_t daysIntoFuture)
+size_t SFE_UBLOX_GNSS::findMGAANOForDate(const string &dataBytes, size_t numDataBytes, uint16_t year, uint8_t month, uint8_t day, uint8_t daysIntoFuture)
 {
   return (findMGAANOForDateInternal((const uint8_t *)dataBytes.c_str(), numDataBytes, year, month, day, daysIntoFuture));
 }
@@ -6621,13 +5840,13 @@ size_t SFE_UBLOX_GNSS::findMGAANOForDateInternal(const uint8_t *dataBytes, size_
     {
       if ((*(dataBytes + dataPtr + 3) == UBX_MGA_ANO) && (*(dataBytes + dataPtr + 10) == matchYear) && (*(dataBytes + dataPtr + 11) == matchMonth) && (*(dataBytes + dataPtr + 12) == matchDay))
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
         {
-          _debugSerial->print(F("findMGAANOForDate: found date match at location "));
-          _debugSerial->println(dataPtr);
+          _debugStream << "findMGAANOForDate: found date match at location ";
+          _debugStream << dataPtr << endl;
         }
-#endif
+
         dateFound = true;
       }
       else
@@ -6639,14 +5858,12 @@ size_t SFE_UBLOX_GNSS::findMGAANOForDateInternal(const uint8_t *dataBytes, size_
     else
     {
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
       // The data was invalid. Send a debug message and then try to find the next 0xB5
       if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
       {
-        _debugSerial->print(F("findMGAANOForDate: bad data - ignored! dataPtr is "));
-        _debugSerial->println(dataPtr);
+        _debugStream << "findMGAANOForDate: bad data - ignored! dataPtr is ";
+        _debugStream << dataPtr << endl;
       }
-#endif
 
       while ((dataPtr < numDataBytes) && (*(dataBytes + ++dataPtr) != UBX_SYNCH_1))
       {
@@ -6671,22 +5888,22 @@ size_t SFE_UBLOX_GNSS::readNavigationDatabase(uint8_t *dataBytes, size_t maxNumD
     initPacketUBXMGAACK();     // Check that RAM has been allocated for the MGA_ACK data
   if (packetUBXMGAACK == NULL) // Bail if the RAM allocation failed
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("readNavigationDatabase: packetUBXMGAACK RAM allocation failed!"));
+      _debugStream << "readNavigationDatabase: packetUBXMGAACK RAM allocation failed!" << endl;
     }
-#endif
+
     return ((size_t)0);
   }
   if (packetUBXMGAACK->head != packetUBXMGAACK->tail) // Does the MGA ACK ringbuffer contain any data?
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("readNavigationDatabase: packetUBXMGAACK contains unprocessed data. Clearing it."));
+      _debugStream << "readNavigationDatabase: packetUBXMGAACK contains unprocessed data. Clearing it." << endl;
     }
-#endif
+
     packetUBXMGAACK->tail = packetUBXMGAACK->head; // Clear the buffer by setting the tail equal to the head
   }
 
@@ -6695,22 +5912,22 @@ size_t SFE_UBLOX_GNSS::readNavigationDatabase(uint8_t *dataBytes, size_t maxNumD
     initPacketUBXMGADBD();     // Check that RAM has been allocated for the MGA_DBD data
   if (packetUBXMGADBD == NULL) // Bail if the RAM allocation failed
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("readNavigationDatabase: packetUBXMGADBD RAM allocation failed!"));
+      _debugStream << "readNavigationDatabase: packetUBXMGADBD RAM allocation failed!" << endl;
     }
-#endif
+
     return ((size_t)0);
   }
   if (packetUBXMGADBD->head != packetUBXMGADBD->tail) // Does the MGA DBD ringbuffer contain any data?
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("readNavigationDatabase: packetUBXMGADBD contains unprocessed data. Clearing it."));
+      _debugStream << "readNavigationDatabase: packetUBXMGADBD contains unprocessed data. Clearing it." << endl;
     }
-#endif
+
     packetUBXMGADBD->tail = packetUBXMGADBD->head; // Clear the buffer by setting the tail equal to the head
   }
 
@@ -6750,12 +5967,12 @@ size_t SFE_UBLOX_GNSS::readNavigationDatabase(uint8_t *dataBytes, size_t maxNumD
   // Check pushResult == 8
   if (pushResult != 8)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("readNavigationDatabase: pushAssistNowDataInternal failed!"));
+      _debugStream << "readNavigationDatabase: pushAssistNowDataInternal failed!" << endl;
     }
-#endif
+
     i2cPollingWait = currentI2cPollingWait; // Restore i2cPollingWait
     setAckAiding(currentAckAiding);         // Restore Ack Aiding
     return ((size_t)0);
@@ -6820,37 +6037,36 @@ size_t SFE_UBLOX_GNSS::readNavigationDatabase(uint8_t *dataBytes, size_t maxNumD
 
       if (idMatch && dataAckd) // Is the ACK valid?
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
         {
-          _debugSerial->print(F("readNavigationDatabase: ACK received. databaseEntriesRX is "));
-          _debugSerial->print(databaseEntriesRX);
-          _debugSerial->print(F(". numBytesReceived is "));
-          _debugSerial->print(numBytesReceived);
-          _debugSerial->print(F(". DBD read complete after "));
-          _debugSerial->print(millis() - startTime);
-          _debugSerial->println(F(" ms"));
+          _debugStream << "readNavigationDatabase: ACK received. databaseEntriesRX is ";
+          _debugStream << databaseEntriesRX;
+          _debugStream << ". numBytesReceived is ";
+          _debugStream << numBytesReceived;
+          _debugStream << ". DBD read complete after ";
+          _debugStream << millis() - startTime;
+          _debugStream << " ms" << endl;
         }
-#endif
+
         keepGoing = false;
       }
       else if (idMatch)
       {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
         if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
         {
-          _debugSerial->print(F("readNavigationDatabase: unexpected ACK received. databaseEntriesRX is 0x"));
-          _debugSerial->print(databaseEntriesRX, HEX);
-          _debugSerial->print(F(". msgPayloadStart is 0x"));
+          _debugStream << "readNavigationDatabase: unexpected ACK received. databaseEntriesRX is 0x";
+          printHex(_debugStream, databaseEntriesRX);
+          _debugStream << ". msgPayloadStart is 0x";
           for (uint8_t i = 4; i > 0; i--)
           {
             if (packetUBXMGAACK->data[packetUBXMGAACK->tail].msgPayloadStart[i - 1] < 0x10)
-              _debugSerial->print(F("0"));
-            _debugSerial->print(packetUBXMGAACK->data[packetUBXMGAACK->tail].msgPayloadStart[i - 1], HEX);
+              _debugStream << "0";
+            printHex(_debugStream, packetUBXMGAACK->data[packetUBXMGAACK->tail].msgPayloadStart[i - 1]);
           }
-          _debugSerial->println();
+          _debugStream << endl;
         }
-#endif
       }
 
       // Increment the tail
@@ -6862,12 +6078,11 @@ size_t SFE_UBLOX_GNSS::readNavigationDatabase(uint8_t *dataBytes, size_t maxNumD
 
   if (keepGoing) // If keepGoing is still true, we must have timed out
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("readNavigationDatabase: DBD RX timed out!"));
+      _debugStream << "readNavigationDatabase: DBD RX timed out!" << endl;
     }
-#endif
   }
 
   i2cPollingWait = currentI2cPollingWait; // Restore i2cPollingWait
@@ -6882,10 +6097,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXMGADBD()
   packetUBXMGADBD = new UBX_MGA_DBD_t; // Allocate RAM for the main struct
   if (packetUBXMGADBD == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXMGADBD: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXMGADBD: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXMGADBD->head = 0; // Initialize the ring buffer pointers
@@ -6972,23 +6187,23 @@ bool SFE_UBLOX_GNSS::createFileBuffer(void)
 {
   if (fileBufferSize == 0) // Bail if the user has not called setFileBufferSize
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("createFileBuffer: Warning. fileBufferSize is zero. Data logging is not possible."));
+      _debugStream << "createFileBuffer: Warning. fileBufferSize is zero. Data logging is not possible." << endl;
     }
-#endif
+
     return (false);
   }
 
   if (ubxFileBuffer != NULL) // Bail if RAM has already been allocated for the file buffer
   {                          // This will happen if you call .begin more than once - without calling .end first
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("createFileBuffer: Warning. File buffer already exists. Skipping..."));
+      _debugStream << "createFileBuffer: Warning. File buffer already exists. Skipping..." << endl;
     }
-#endif
+
     return (false);
   }
 
@@ -6998,18 +6213,16 @@ bool SFE_UBLOX_GNSS::createFileBuffer(void)
   {
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("createFileBuffer: RAM alloc failed!"));
+      _debugStream << "createFileBuffer: RAM alloc failed!" << endl;
     }
     return (false);
   }
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("createFileBuffer: fileBufferSize is: "));
-    _debugSerial->println(fileBufferSize);
+    _debugStream << "createFileBuffer: fileBufferSize is: ";
+    _debugStream << fileBufferSize << endl;
   }
-#endif
 
   fileBufferHead = 0; // Initialize head and tail
   fileBufferTail = 0;
@@ -7044,12 +6257,12 @@ bool SFE_UBLOX_GNSS::storePacket(ubxPacket *msg)
   // First, check that the file buffer has been created
   if ((ubxFileBuffer == NULL) || (fileBufferSize == 0))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("storePacket: file buffer not available!"));
+      _debugStream << "storePacket: file buffer not available!" << endl;
     }
-#endif
+
     return (false);
   }
 
@@ -7057,12 +6270,12 @@ bool SFE_UBLOX_GNSS::storePacket(ubxPacket *msg)
   uint16_t totalLength = msg->len + 8; // Total length. Include sync chars, class, id, length and checksum bytes
   if (totalLength > fileBufferSpaceAvailable())
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("storePacket: insufficient space available! Data will be lost!"));
+      _debugStream << "storePacket: insufficient space available! Data will be lost!" << endl;
     }
-#endif
+
     return (false);
   }
 
@@ -7096,24 +6309,24 @@ bool SFE_UBLOX_GNSS::storeFileBytes(uint8_t *theBytes, uint16_t numBytes)
   // First, check that the file buffer has been created
   if ((ubxFileBuffer == NULL) || (fileBufferSize == 0))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("storeFileBytes: file buffer not available!"));
+      _debugStream << "storeFileBytes: file buffer not available!" << endl;
     }
-#endif
+
     return (false);
   }
 
   // Now, check if there is enough space in the buffer for all of the data
   if (numBytes > fileBufferSpaceAvailable())
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("storeFileBytes: insufficient space available! Data will be lost!"));
+      _debugStream << "storeFileBytes: insufficient space available! Data will be lost!" << endl;
     }
-#endif
+
     return (false);
   }
 
@@ -7209,32 +6422,6 @@ bool SFE_UBLOX_GNSS::setPortInput(uint8_t portID, uint8_t inStreamSettings, uint
   return ((sendCommand(&packetCfg, maxWait)) == SFE_UBLOX_STATUS_DATA_SENT); // We are only expecting an ACK
 }
 
-// Changes the I2C address that the u-blox module responds to
-// 0x42 is the default but can be changed with this command
-bool SFE_UBLOX_GNSS::setI2CAddress(uint8_t deviceAddress, uint16_t maxWait)
-{
-  // Get the current config values for the I2C port
-  // This will load the payloadCfg array with current port settings
-  if (getPortSettings(COM_PORT_I2C, maxWait) == false)
-    return (false); // Something went wrong. Bail.
-
-  packetCfg.cls = UBX_CLASS_CFG;
-  packetCfg.id = UBX_CFG_PRT;
-  packetCfg.len = 20;
-  packetCfg.startingSpot = 0;
-
-  // payloadCfg is now loaded with current bytes. Change only the ones we need to
-  payloadCfg[4] = deviceAddress << 1; // DDC mode LSB
-
-  if (sendCommand(&packetCfg, maxWait) == SFE_UBLOX_STATUS_DATA_SENT) // We are only expecting an ACK
-  {
-    // Success! Now change our internal global.
-    _gpsI2Caddress = deviceAddress; // Store the I2C address from user
-    return (true);
-  }
-  return (false);
-}
-
 // Changes the serial baud rate of the u-blox module, can't return success/fail 'cause ACK from modem
 // is lost due to baud rate change
 void SFE_UBLOX_GNSS::setSerialRate(uint32_t baudrate, uint8_t uartPort, uint16_t maxWait)
@@ -7244,13 +6431,11 @@ void SFE_UBLOX_GNSS::setSerialRate(uint32_t baudrate, uint8_t uartPort, uint16_t
   if (getPortSettings(uartPort, maxWait) == false)
     return; // Something went wrong. Bail.
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("Current baud rate: "));
-    _debugSerial->println(((uint32_t)payloadCfg[10] << 16) | ((uint32_t)payloadCfg[9] << 8) | payloadCfg[8]);
+    _debugStream << "Current baud rate: ";
+    _debugStream << (((uint32_t)payloadCfg[10] << 16) | ((uint32_t)payloadCfg[9] << 8) | payloadCfg[8]) << endl;
   }
-#endif
 
   packetCfg.cls = UBX_CLASS_CFG;
   packetCfg.id = UBX_CFG_PRT;
@@ -7263,32 +6448,23 @@ void SFE_UBLOX_GNSS::setSerialRate(uint32_t baudrate, uint8_t uartPort, uint16_t
   payloadCfg[10] = baudrate >> 16;
   payloadCfg[11] = baudrate >> 24;
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("New baud rate:"));
-    _debugSerial->println(((uint32_t)payloadCfg[10] << 16) | ((uint32_t)payloadCfg[9] << 8) | payloadCfg[8]);
+    _debugStream << "New baud rate:";
+    _debugStream << (((uint32_t)payloadCfg[10] << 16) | ((uint32_t)payloadCfg[9] << 8) | payloadCfg[8]) << endl;
   }
-#endif
 
   sfe_ublox_status_e retVal = sendCommand(&packetCfg, maxWait);
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("setSerialRate: sendCommand returned: "));
-    _debugSerial->println(statusString(retVal));
+    _debugStream << "setSerialRate: sendCommand returned: ";
+    _debugStream << statusString(retVal) << endl;
   }
-#else
   (void)retVal; // Get rid of a pesky compiler warning!
-#endif
 }
 
 // Configure a port to output UBX, NMEA, RTCM3 or a combination thereof
-bool SFE_UBLOX_GNSS::setI2COutput(uint8_t comSettings, uint16_t maxWait)
-{
-  return (setPortOutput(COM_PORT_I2C, comSettings, maxWait));
-}
 bool SFE_UBLOX_GNSS::setUART1Output(uint8_t comSettings, uint16_t maxWait)
 {
   return (setPortOutput(COM_PORT_UART1, comSettings, maxWait));
@@ -7300,10 +6476,6 @@ bool SFE_UBLOX_GNSS::setUART2Output(uint8_t comSettings, uint16_t maxWait)
 bool SFE_UBLOX_GNSS::setUSBOutput(uint8_t comSettings, uint16_t maxWait)
 {
   return (setPortOutput(COM_PORT_USB, comSettings, maxWait));
-}
-bool SFE_UBLOX_GNSS::setSPIOutput(uint8_t comSettings, uint16_t maxWait)
-{
-  return (setPortOutput(COM_PORT_SPI, comSettings, maxWait));
 }
 
 // Want to see the NMEA messages on the Serial port? Here's how
@@ -7714,18 +6886,18 @@ bool SFE_UBLOX_GNSS::getProtocolVersion(uint16_t maxWait)
 
   // if (_printDebug == true)
   // {
-  //   _debugSerial->print(F("MON VER Payload:"));
+  //   _debugStream << "MON VER Payload:";
   //   for (int location = 0; location < packetCfg.len; location++)
   //   {
   //     if (location % 30 == 0)
-  //       _debugSerial->println();
-  //     _debugSerial->write(payloadCfg[location]);
+  //       _debugStream <<  << endl;
+  //     _debugStream << (payloadCfg[location]);
   //   }
-  //   _debugSerial->println();
+  //   _debugStream <<  << endl;
   // }
 
   // We will step through the payload looking at each extension field of 30 bytes
-  char *ptr;
+  const char *ptr;
   for (uint8_t extensionNumber = 0; extensionNumber < ((packetCfg.len - 40) / 30); extensionNumber++)
   {
     ptr = strstr((const char *)&payloadCfg[(30 * extensionNumber)], "PROTVER="); // Check for PROTVER (should be in extension 2)
@@ -7741,15 +6913,14 @@ bool SFE_UBLOX_GNSS::getProtocolVersion(uint16_t maxWait)
         moduleSWVersion->versionLow = protLo;
         moduleSWVersion->moduleQueried = true; // Mark this data as new
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
         if (_printDebug == true)
         {
-          _debugSerial->print(F("Protocol version: "));
-          _debugSerial->print(moduleSWVersion->versionHigh);
-          _debugSerial->print(F("."));
-          _debugSerial->println(moduleSWVersion->versionLow);
+          _debugStream << "Protocol version: ";
+          _debugStream << moduleSWVersion->versionHigh;
+          _debugStream << ".";
+          _debugStream << moduleSWVersion->versionLow << endl;
         }
-#endif
+
         return (true); // Success!
       }
     }
@@ -7764,10 +6935,10 @@ bool SFE_UBLOX_GNSS::initModuleSWVersion()
   moduleSWVersion = new moduleSWVersion_t; // Allocate RAM for the main struct
   if (moduleSWVersion == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initModuleSWVersion: RAM alloc failed!"));
-#endif
+      _debugStream << "initModuleSWVersion: RAM alloc failed!" << endl;
+
     return (false);
   }
   moduleSWVersion->versionHigh = 0;
@@ -7779,7 +6950,7 @@ bool SFE_UBLOX_GNSS::initModuleSWVersion()
 // Geofences
 
 // Add a new geofence using UBX-CFG-GEOFENCE
-bool SFE_UBLOX_GNSS::addGeofence(int32_t latitude, int32_t longitude, uint32_t radius, byte confidence, byte pinPolarity, byte pin, uint16_t maxWait)
+bool SFE_UBLOX_GNSS::addGeofence(int32_t latitude, int32_t longitude, uint32_t radius, uint8_t confidence, uint8_t pinPolarity, uint8_t pin, uint16_t maxWait)
 {
   if (currentGeofenceParams == NULL)
     initGeofenceParams();            // Check if RAM has been allocated for currentGeofenceParams
@@ -7953,10 +7124,10 @@ bool SFE_UBLOX_GNSS::initGeofenceParams()
   currentGeofenceParams = new geofenceParams_t; // Allocate RAM for the main struct
   if (currentGeofenceParams == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initGeofenceParams: RAM alloc failed!"));
-#endif
+      _debugStream << "initGeofenceParams: RAM alloc failed!" << endl;
+
     return (false);
   }
   currentGeofenceParams->numFences = 0;
@@ -7972,15 +7143,15 @@ bool SFE_UBLOX_GNSS::powerSaveMode(bool power_save, uint16_t maxWait)
   /*
   if (_printDebug == true)
   {
-    _debugSerial->print(F("Protocol version is "));
-    _debugSerial->println(protVer);
+    _debugStream << "Protocol version is ";
+    _debugStream << protVer << endl;
   }
   */
   if (protVer >= 27)
   {
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("powerSaveMode (UBX-CFG-RXM) is not supported by this protocol version"));
+      _debugStream << "powerSaveMode (UBX-CFG-RXM) is not supported by this protocol version" << endl;
     }
     return (false);
   }
@@ -7999,15 +7170,15 @@ uint8_t SFE_UBLOX_GNSS::getPowerSaveMode(uint16_t maxWait)
   /*
   if (_printDebug == true)
   {
-    _debugSerial->print(F("Protocol version is "));
-    _debugSerial->println(protVer);
+    _debugStream << "Protocol version is ";
+    _debugStream << protVer << endl;
   }
   */
   if (protVer >= 27)
   {
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
     {
-      _debugSerial->println(F("powerSaveMode (UBX-CFG-RXM) is not supported by this protocol version"));
+      _debugStream << "powerSaveMode (UBX-CFG-RXM) is not supported by this protocol version" << endl;
     }
     return (255);
   }
@@ -8032,14 +7203,13 @@ uint8_t SFE_UBLOX_GNSS::getPowerSaveMode(uint16_t maxWait)
 bool SFE_UBLOX_GNSS::powerOff(uint32_t durationInMs, uint16_t maxWait)
 {
   // use durationInMs = 0 for infinite duration
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
   if (_printDebug == true)
   {
-    _debugSerial->print(F("Powering off for "));
-    _debugSerial->print(durationInMs);
-    _debugSerial->println(" ms");
+    _debugStream << "Powering off for ";
+    _debugStream << durationInMs;
+    _debugStream << " ms" << endl;
   }
-#endif
 
   // Power off device using UBX-RXM-PMREQ
   packetCfg.cls = UBX_CLASS_RXM; // 0x02
@@ -8080,14 +7250,13 @@ bool SFE_UBLOX_GNSS::powerOff(uint32_t durationInMs, uint16_t maxWait)
 bool SFE_UBLOX_GNSS::powerOffWithInterrupt(uint32_t durationInMs, uint32_t wakeupSources, bool forceWhileUsb, uint16_t maxWait)
 {
   // use durationInMs = 0 for infinite duration
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
   if (_printDebug == true)
   {
-    _debugSerial->print(F("Powering off for "));
-    _debugSerial->print(durationInMs);
-    _debugSerial->println(" ms");
+    _debugStream << "Powering off for ";
+    _debugStream << durationInMs;
+    _debugStream << " ms" << endl;
   }
-#endif
 
   // Power off device using UBX-RXM-PMREQ
   packetCfg.cls = UBX_CLASS_RXM; // 0x02
@@ -8162,7 +7331,7 @@ bool SFE_UBLOX_GNSS::setPowerManagement(sfe_ublox_pms_mode_e mode, uint16_t peri
   packetCfg.len = 8;
   packetCfg.startingSpot = 0;
 
-  packetCfg.payload[0] = 0x0; //message version
+  packetCfg.payload[0] = 0x0; // message version
   packetCfg.payload[1] = mode;
   // only valid if mode==SFE_UBLOX_PMS_MODE_INTERVAL
   if (mode == SFE_UBLOX_PMS_MODE_INTERVAL)
@@ -8179,8 +7348,8 @@ bool SFE_UBLOX_GNSS::setPowerManagement(sfe_ublox_pms_mode_e mode, uint16_t peri
     packetCfg.payload[4] = 0;
     packetCfg.payload[5] = 0;
   }
-  packetCfg.payload[6] = 0x0; //reserved
-  packetCfg.payload[7] = 0x0; //reserved
+  packetCfg.payload[6] = 0x0; // reserved
+  packetCfg.payload[7] = 0x0; // reserved
   return sendCommand(&packetCfg, maxWait);
 }
 
@@ -8191,12 +7360,11 @@ bool SFE_UBLOX_GNSS::setupPowerMode(sfe_ublox_rxm_mode_e mode, uint16_t maxWait)
   packetCfg.len = 2;
   packetCfg.startingSpot = 0;
 
-  packetCfg.payload[0] = 0x0; //reserved
-  packetCfg.payload[1] = mode; //low power mode
+  packetCfg.payload[0] = 0x0;  // reserved
+  packetCfg.payload[1] = mode; // low power mode
 
   return sendCommand(&packetCfg, maxWait);
 }
-
 
 // Position Accuracy
 
@@ -8236,13 +7404,10 @@ uint16_t SFE_UBLOX_GNSS::getNAV5PositionAccuracy(uint16_t maxWait)
   if (sendCommand(&packetCfg, maxWait) != SFE_UBLOX_STATUS_DATA_RECEIVED) // We are expecting data and an ACK
     return 0;
 
-
   uint16_t pAcc = ((uint16_t)payloadCfg[19]) << 8;
   pAcc |= payloadCfg[18];
   return (pAcc);
 }
-
-
 
 // Dynamic Platform Model
 
@@ -8263,7 +7428,7 @@ bool SFE_UBLOX_GNSS::setDynamicModel(dynModel newDynamicModel, uint16_t maxWait)
   if (sendCommand(&packetCfg, maxWait) != SFE_UBLOX_STATUS_DATA_RECEIVED) // We are expecting data and an ACK
     return (false);
 
-  payloadCfg[0] |= 0x01;            // mask: set only the dyn bit (0)
+  payloadCfg[0] |= 0x01;           // mask: set only the dyn bit (0)
   payloadCfg[2] = newDynamicModel; // dynModel
 
   packetCfg.len = 36;
@@ -8319,7 +7484,7 @@ bool SFE_UBLOX_GNSS::enableOdometer(bool enable, uint16_t maxWait)
 
   return (sendCommand(&packetCfg, maxWait) == SFE_UBLOX_STATUS_DATA_SENT); // We are only expecting an ACK
 }
-  
+
 // Read the odometer configuration
 bool SFE_UBLOX_GNSS::getOdometerConfig(uint8_t *flags, uint8_t *odoCfg, uint8_t *cogMaxSpeed, uint8_t *cogMaxPosAcc, uint8_t *velLpGain, uint8_t *cogLpGain, uint16_t maxWait)
 {
@@ -8442,12 +7607,11 @@ bool SFE_UBLOX_GNSS::getESFAutoAlignment(uint16_t maxWait)
 
   if (sendCommand(&packetCfg, maxWait) != SFE_UBLOX_STATUS_DATA_RECEIVED)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("getESFAutoAlignment failed"));
+      _debugStream << "getESFAutoAlignment failed" << endl;
     }
-#endif
 
     return (false); // If command send fails then bail
   }
@@ -8465,12 +7629,11 @@ bool SFE_UBLOX_GNSS::setESFAutoAlignment(bool enable, uint16_t maxWait)
 
   if (sendCommand(&packetCfg, maxWait) != SFE_UBLOX_STATUS_DATA_RECEIVED)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("getESFAutoAlignment failed"));
+      _debugStream << "getESFAutoAlignment failed" << endl;
     }
-#endif
 
     return (false); // If command send fails then bail
   }
@@ -8484,12 +7647,12 @@ bool SFE_UBLOX_GNSS::setESFAutoAlignment(bool enable, uint16_t maxWait)
 
   if (sendCommand(&packetCfg, maxWait) != SFE_UBLOX_STATUS_DATA_SENT) // This time we are only expecting an ACK
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
     {
-      _debugSerial->println(F("setESFAutoAlignment failed"));
+      _debugStream << "setESFAutoAlignment failed" << endl;
     }
-#endif
+
     return (false);
   }
 
@@ -8807,10 +7970,10 @@ bool SFE_UBLOX_GNSS::setDynamicSPARTNKey(uint8_t keyLengthBytes, uint16_t validF
 
   if (binaryKey == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
-      _debugSerial->println(F("setDynamicSPARTNKey: binaryKey RAM allocation failed!"));
-#endif
+      _debugStream << "setDynamicSPARTNKey: binaryKey RAM allocation failed!" << endl;
+
     return (false);
   }
 
@@ -8905,10 +8068,10 @@ bool SFE_UBLOX_GNSS::setDynamicSPARTNKeys(uint8_t keyLengthBytes1, uint16_t vali
 
   if (binaryKey1 == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
-      _debugSerial->println(F("setDynamicSPARTNKeys: binaryKey1 RAM allocation failed!"));
-#endif
+      _debugStream << "setDynamicSPARTNKeys: binaryKey1 RAM allocation failed!" << endl;
+
     return (false);
   }
 
@@ -8916,10 +8079,10 @@ bool SFE_UBLOX_GNSS::setDynamicSPARTNKeys(uint8_t keyLengthBytes1, uint16_t vali
 
   if (binaryKey2 == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if (_printDebug == true)
-      _debugSerial->println(F("setDynamicSPARTNKeys: binaryKey2 RAM allocation failed!"));
-#endif
+      _debugStream << "setDynamicSPARTNKeys: binaryKey2 RAM allocation failed!" << endl;
+
     delete[] binaryKey1;
     return (false);
   }
@@ -9104,25 +8267,22 @@ sfe_ublox_status_e SFE_UBLOX_GNSS::getVal(uint32_t key, uint8_t layer, uint16_t 
   payloadCfg[6] = key >> 8 * 2;
   payloadCfg[7] = key >> 8 * 3;
 
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
   if (_printDebug == true)
   {
-    _debugSerial->print(F("key: 0x"));
-    _debugSerial->print(key, HEX);
-    _debugSerial->println();
+    _debugStream << "key: 0x";
+    printHex(_debugStream, key);
+    _debugStream << endl;
   }
-#endif
 
   // Send VALGET command with this key
 
   sfe_ublox_status_e retVal = sendCommand(&packetCfg, maxWait);
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
   if (_printDebug == true)
   {
-    _debugSerial->print(F("getVal: sendCommand returned: "));
-    _debugSerial->println(statusString(retVal));
+    _debugStream << "getVal: sendCommand returned: ";
+    _debugStream << statusString(retVal) << endl;
   }
-#endif
 
   // Verify the response is the correct length as compared to what the user called (did the module respond with 8-bits but the user called getVal32?)
   // Response is 8 bytes plus cfg data
@@ -9449,7 +8609,7 @@ uint8_t SFE_UBLOX_GNSS::newCfgValset8(uint32_t key, uint8_t value, uint8_t layer
 
   _numCfgKeyIDs = 1;
 
-// Clear all of packet payload
+  // Clear all of packet payload
   memset(payloadCfg, 0, packetCfgPayloadSize);
 
   payloadCfg[0] = 0;     // Message Version - set to 0
@@ -9495,10 +8655,10 @@ uint8_t SFE_UBLOX_GNSS::addCfgValset64(uint32_t key, uint64_t value)
 {
   if ((_autoSendAtSpaceRemaining > 0) && (packetCfg.len >= (packetCfgPayloadSize - _autoSendAtSpaceRemaining)))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset64: autosend"));
-#endif
+      _debugStream << "addCfgValset64: autosend" << endl;
+
     sendCommand(&packetCfg);
     packetCfg.len = 4; // 4 byte header
     packetCfg.startingSpot = 0;
@@ -9508,19 +8668,19 @@ uint8_t SFE_UBLOX_GNSS::addCfgValset64(uint32_t key, uint64_t value)
 
   if (packetCfg.len >= (packetCfgPayloadSize - 12))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset64: packetCfgPayloadSize reached!"));
-#endif
+      _debugStream << "addCfgValset64: packetCfgPayloadSize reached!" << endl;
+
     return false;
   }
 
   if (_numCfgKeyIDs == CFG_VALSET_MAX_KEYS)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset64: key limit reached!"));
-#endif
+      _debugStream << "addCfgValset64: key limit reached!" << endl;
+
     return false;
   }
 
@@ -9555,10 +8715,10 @@ uint8_t SFE_UBLOX_GNSS::addCfgValset32(uint32_t key, uint32_t value)
 {
   if ((_autoSendAtSpaceRemaining > 0) && (packetCfg.len >= (packetCfgPayloadSize - _autoSendAtSpaceRemaining)))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset32: autosend"));
-#endif
+      _debugStream << "addCfgValset32: autosend" << endl;
+
     sendCommand(&packetCfg);
     packetCfg.len = 4; // 4 byte header
     packetCfg.startingSpot = 0;
@@ -9568,19 +8728,19 @@ uint8_t SFE_UBLOX_GNSS::addCfgValset32(uint32_t key, uint32_t value)
 
   if (packetCfg.len >= (packetCfgPayloadSize - 8))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset32: packetCfgPayloadSize reached!"));
-#endif
+      _debugStream << "addCfgValset32: packetCfgPayloadSize reached!" << endl;
+
     return false;
   }
 
   if (_numCfgKeyIDs == CFG_VALSET_MAX_KEYS)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset32: key limit reached!"));
-#endif
+      _debugStream << "addCfgValset32: key limit reached!" << endl;
+
     return false;
   }
 
@@ -9611,10 +8771,10 @@ uint8_t SFE_UBLOX_GNSS::addCfgValset16(uint32_t key, uint16_t value)
 {
   if ((_autoSendAtSpaceRemaining > 0) && (packetCfg.len >= (packetCfgPayloadSize - _autoSendAtSpaceRemaining)))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset16: autosend"));
-#endif
+      _debugStream << "addCfgValset16: autosend" << endl;
+
     sendCommand(&packetCfg);
     packetCfg.len = 4; // 4 byte header
     packetCfg.startingSpot = 0;
@@ -9624,19 +8784,19 @@ uint8_t SFE_UBLOX_GNSS::addCfgValset16(uint32_t key, uint16_t value)
 
   if (packetCfg.len >= (packetCfgPayloadSize - 6))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset16: packetCfgPayloadSize reached!"));
-#endif
+      _debugStream << "addCfgValset16: packetCfgPayloadSize reached!" << endl;
+
     return false;
   }
 
   if (_numCfgKeyIDs == CFG_VALSET_MAX_KEYS)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset16: key limit reached!"));
-#endif
+      _debugStream << "addCfgValset16: key limit reached!" << endl;
+
     return false;
   }
 
@@ -9665,10 +8825,10 @@ uint8_t SFE_UBLOX_GNSS::addCfgValset8(uint32_t key, uint8_t value)
 {
   if ((_autoSendAtSpaceRemaining > 0) && (packetCfg.len >= (packetCfgPayloadSize - _autoSendAtSpaceRemaining)))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset8: autosend"));
-#endif
+      _debugStream << "addCfgValset8: autosend" << endl;
+
     sendCommand(&packetCfg);
     packetCfg.len = 4; // 4 byte header
     packetCfg.startingSpot = 0;
@@ -9678,19 +8838,19 @@ uint8_t SFE_UBLOX_GNSS::addCfgValset8(uint32_t key, uint8_t value)
 
   if (packetCfg.len >= (packetCfgPayloadSize - 5))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset8: packetCfgPayloadSize reached!"));
-#endif
+      _debugStream << "addCfgValset8: packetCfgPayloadSize reached!" << endl;
+
     return false;
   }
 
   if (_numCfgKeyIDs == CFG_VALSET_MAX_KEYS)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("addCfgValset8: key limit reached!"));
-#endif
+      _debugStream << "addCfgValset8: key limit reached!" << endl;
+
     return false;
   }
 
@@ -9718,10 +8878,10 @@ uint8_t SFE_UBLOX_GNSS::sendCfgValset64(uint32_t key, uint64_t value, uint16_t m
 {
   if ((_autoSendAtSpaceRemaining > 0) && (packetCfg.len >= (packetCfgPayloadSize - _autoSendAtSpaceRemaining)))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset64: autosend"));
-#endif
+      _debugStream << "sendCfgValset64: autosend" << endl;
+
     sendCommand(&packetCfg);
     packetCfg.len = 4; // 4 byte header
     packetCfg.startingSpot = 0;
@@ -9731,17 +8891,15 @@ uint8_t SFE_UBLOX_GNSS::sendCfgValset64(uint32_t key, uint64_t value, uint16_t m
 
   if (packetCfg.len >= (packetCfgPayloadSize - 12))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset64: packetCfgPayloadSize reached!"));
-#endif
+      _debugStream << "sendCfgValset64: packetCfgPayloadSize reached!" << endl;
   }
   else if (_numCfgKeyIDs == CFG_VALSET_MAX_KEYS)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset64: key limit reached!"));
-#endif
+      _debugStream << "sendCfgValset64: key limit reached!" << endl;
   }
   else
     // Load keyID and value into outgoing payload
@@ -9759,10 +8917,10 @@ uint8_t SFE_UBLOX_GNSS::sendCfgValset32(uint32_t key, uint32_t value, uint16_t m
 {
   if ((_autoSendAtSpaceRemaining > 0) && (packetCfg.len >= (packetCfgPayloadSize - _autoSendAtSpaceRemaining)))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset32: autosend"));
-#endif
+      _debugStream << "sendCfgValset32: autosend" << endl;
+
     sendCommand(&packetCfg);
     packetCfg.len = 4; // 4 byte header
     packetCfg.startingSpot = 0;
@@ -9772,17 +8930,15 @@ uint8_t SFE_UBLOX_GNSS::sendCfgValset32(uint32_t key, uint32_t value, uint16_t m
 
   if (packetCfg.len >= (packetCfgPayloadSize - 8))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset32: packetCfgPayloadSize reached!"));
-#endif
+      _debugStream << "sendCfgValset32: packetCfgPayloadSize reached!" << endl;
   }
   else if (_numCfgKeyIDs == CFG_VALSET_MAX_KEYS)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset32: key limit reached!"));
-#endif
+      _debugStream << "sendCfgValset32: key limit reached!" << endl;
   }
   else
     // Load keyID and value into outgoing payload
@@ -9800,10 +8956,10 @@ uint8_t SFE_UBLOX_GNSS::sendCfgValset16(uint32_t key, uint16_t value, uint16_t m
 {
   if ((_autoSendAtSpaceRemaining > 0) && (packetCfg.len >= (packetCfgPayloadSize - _autoSendAtSpaceRemaining)))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset16: autosend"));
-#endif
+      _debugStream << "sendCfgValset16: autosend" << endl;
+
     sendCommand(&packetCfg);
     packetCfg.len = 4; // 4 byte header
     packetCfg.startingSpot = 0;
@@ -9813,17 +8969,15 @@ uint8_t SFE_UBLOX_GNSS::sendCfgValset16(uint32_t key, uint16_t value, uint16_t m
 
   if (packetCfg.len >= (packetCfgPayloadSize - 6))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset16: packetCfgPayloadSize reached!"));
-#endif
+      _debugStream << "sendCfgValset16: packetCfgPayloadSize reached!" << endl;
   }
   else if (_numCfgKeyIDs == CFG_VALSET_MAX_KEYS)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset16: key limit reached!"));
-#endif
+      _debugStream << "sendCfgValset16: key limit reached!" << endl;
   }
   else
     // Load keyID and value into outgoing payload
@@ -9841,10 +8995,10 @@ uint8_t SFE_UBLOX_GNSS::sendCfgValset8(uint32_t key, uint8_t value, uint16_t max
 {
   if ((_autoSendAtSpaceRemaining > 0) && (packetCfg.len >= (packetCfgPayloadSize - _autoSendAtSpaceRemaining)))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset8: autosend"));
-#endif
+      _debugStream << "sendCfgValset8: autosend" << endl;
+
     sendCommand(&packetCfg);
     packetCfg.len = 4; // 4 byte header
     packetCfg.startingSpot = 0;
@@ -9854,17 +9008,15 @@ uint8_t SFE_UBLOX_GNSS::sendCfgValset8(uint32_t key, uint8_t value, uint16_t max
 
   if (packetCfg.len >= (packetCfgPayloadSize - 5))
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset8: packetCfgPayloadSize reached!"));
-#endif
+      _debugStream << "sendCfgValset8: packetCfgPayloadSize reached!" << endl;
   }
   else if (_numCfgKeyIDs == CFG_VALSET_MAX_KEYS)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("sendCfgValset8: key limit reached!"));
-#endif
+      _debugStream << "sendCfgValset8: key limit reached!" << endl;
   }
   else
     // Load keyID and value into outgoing payload
@@ -10008,10 +9160,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVPOSECEFcallback(void (*callbackPointer)(UBX_NAV_P
 
   if (packetUBXNAVPOSECEF->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVPOSECEFcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVPOSECEFcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10033,10 +9185,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVPOSECEFcallbackPtr(void (*callbackPointerPtr)(UBX
 
   if (packetUBXNAVPOSECEF->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVPOSECEFcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVPOSECEFcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10068,10 +9220,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVPOSECEF()
   packetUBXNAVPOSECEF = new UBX_NAV_POSECEF_t; // Allocate RAM for the main struct
   if (packetUBXNAVPOSECEF == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVPOSECEF: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVPOSECEF: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVPOSECEF->automaticFlags.flags.all = 0;
@@ -10201,10 +9353,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVSTATUScallback(void (*callbackPointer)(UBX_NAV_ST
 
   if (packetUBXNAVSTATUS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVSTATUScallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVSTATUScallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10226,10 +9378,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVSTATUScallbackPtr(void (*callbackPointerPtr)(UBX_
 
   if (packetUBXNAVSTATUS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVSTATUScallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVSTATUScallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10261,10 +9413,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVSTATUS()
   packetUBXNAVSTATUS = new UBX_NAV_STATUS_t; // Allocate RAM for the main struct
   if (packetUBXNAVSTATUS == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVSTATUS: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVSTATUS: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVSTATUS->automaticFlags.flags.all = 0;
@@ -10306,7 +9458,7 @@ bool SFE_UBLOX_GNSS::getDOP(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getDOP: Autoreporting"));
+    //    _debugStream << "getDOP: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_NAV, UBX_NAV_DOP);
     return packetUBXNAVDOP->moduleQueried.moduleQueried.bits.all;
@@ -10316,7 +9468,7 @@ bool SFE_UBLOX_GNSS::getDOP(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getDOP: Exit immediately"));
+    //    _debugStream << "getDOP: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -10324,7 +9476,7 @@ bool SFE_UBLOX_GNSS::getDOP(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getDOP: Polling"));
+    //   _debugStream << "getDOP: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting navigation position so we have to poll explicitly
@@ -10343,15 +9495,15 @@ bool SFE_UBLOX_GNSS::getDOP(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getDOP: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getDOP: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getDOP retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getDOP retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -10413,10 +9565,10 @@ bool SFE_UBLOX_GNSS::setAutoDOPcallback(void (*callbackPointer)(UBX_NAV_DOP_data
 
   if (packetUBXNAVDOP->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoDOPcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoDOPcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10438,10 +9590,10 @@ bool SFE_UBLOX_GNSS::setAutoDOPcallbackPtr(void (*callbackPointerPtr)(UBX_NAV_DO
 
   if (packetUBXNAVDOP->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoDOPcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoDOPcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10473,10 +9625,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVDOP()
   packetUBXNAVDOP = new UBX_NAV_DOP_t; // Allocate RAM for the main struct
   if (packetUBXNAVDOP == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVDOP: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVDOP: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVDOP->automaticFlags.flags.all = 0;
@@ -10517,7 +9669,7 @@ bool SFE_UBLOX_GNSS::getNAVEOE(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getEOE: Autoreporting"));
+    //    _debugStream << "getEOE: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_NAV, UBX_NAV_EOE);
     return packetUBXNAVEOE->moduleQueried.moduleQueried.bits.all;
@@ -10527,7 +9679,7 @@ bool SFE_UBLOX_GNSS::getNAVEOE(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getEOE: Exit immediately"));
+    //    _debugStream << "getEOE: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -10612,10 +9764,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVEOEcallbackPtr(void (*callbackPointerPtr)(UBX_NAV
 
   if (packetUBXNAVEOE->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVEOEcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVEOEcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10647,10 +9799,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVEOE()
   packetUBXNAVEOE = new UBX_NAV_EOE_t; // Allocate RAM for the main struct
   if (packetUBXNAVEOE == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVEOE: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVEOE: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVEOE->automaticFlags.flags.all = 0;
@@ -10785,10 +9937,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVATTcallback(void (*callbackPointer)(UBX_NAV_ATT_d
 
   if (packetUBXNAVATT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVATTcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVATTcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10810,10 +9962,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVATTcallbackPtr(void (*callbackPointerPtr)(UBX_NAV
 
   if (packetUBXNAVATT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVATTcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVATTcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -10845,10 +9997,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVATT()
   packetUBXNAVATT = new UBX_NAV_ATT_t; // Allocate RAM for the main struct
   if (packetUBXNAVATT == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVATT: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVATT: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVATT->automaticFlags.flags.all = 0;
@@ -10890,7 +10042,7 @@ bool SFE_UBLOX_GNSS::getPVT(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getPVT: Autoreporting"));
+    //    _debugStream << "getPVT: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_NAV, UBX_NAV_PVT);
     return packetUBXNAVPVT->moduleQueried.moduleQueried1.bits.all;
@@ -10900,7 +10052,7 @@ bool SFE_UBLOX_GNSS::getPVT(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getPVT: Exit immediately"));
+    //    _debugStream << "getPVT: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -10908,7 +10060,7 @@ bool SFE_UBLOX_GNSS::getPVT(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getPVT: Polling"));
+    //   _debugStream << "getPVT: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting navigation position so we have to poll explicitly
@@ -10928,15 +10080,15 @@ bool SFE_UBLOX_GNSS::getPVT(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getPVT: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getPVT: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getPVT retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getPVT retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -11001,10 +10153,10 @@ bool SFE_UBLOX_GNSS::setAutoPVTcallback(void (*callbackPointer)(UBX_NAV_PVT_data
 
   if (packetUBXNAVPVT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoPVTcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoPVTcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11027,10 +10179,10 @@ bool SFE_UBLOX_GNSS::setAutoPVTcallbackPtr(void (*callbackPointerPtr)(UBX_NAV_PV
 
   if (packetUBXNAVPVT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoPVTcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoPVTcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11063,10 +10215,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVPVT()
   packetUBXNAVPVT = new UBX_NAV_PVT_t; // Allocate RAM for the main struct
   if (packetUBXNAVPVT == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVPVT: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVPVT: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVPVT->automaticFlags.flags.all = 0;
@@ -11197,10 +10349,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVODOcallback(void (*callbackPointer)(UBX_NAV_ODO_d
 
   if (packetUBXNAVODO->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVODOcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVODOcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11222,10 +10374,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVODOcallbackPtr(void (*callbackPointerPtr)(UBX_NAV
 
   if (packetUBXNAVODO->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVODOcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVODOcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11257,10 +10409,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVODO()
   packetUBXNAVODO = new UBX_NAV_ODO_t; // Allocate RAM for the main struct
   if (packetUBXNAVODO == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVODO: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVODO: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVODO->automaticFlags.flags.all = 0;
@@ -11389,10 +10541,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVVELECEFcallback(void (*callbackPointer)(UBX_NAV_V
 
   if (packetUBXNAVVELECEF->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVVELECEFcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVVELECEFcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11414,10 +10566,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVVELECEFcallbackPtr(void (*callbackPointerPtr)(UBX
 
   if (packetUBXNAVVELECEF->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVVELECEFcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVVELECEFcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11449,10 +10601,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVVELECEF()
   packetUBXNAVVELECEF = new UBX_NAV_VELECEF_t; // Allocate RAM for the main struct
   if (packetUBXNAVVELECEF == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVVELECEF: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVVELECEF: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVVELECEF->automaticFlags.flags.all = 0;
@@ -11578,10 +10730,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVVELNEDcallback(void (*callbackPointer)(UBX_NAV_VE
 
   if (packetUBXNAVVELNED->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVVELNEDcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVVELNEDcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11603,10 +10755,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVVELNEDcallbackPtr(void (*callbackPointerPtr)(UBX_
 
   if (packetUBXNAVVELNED->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVVELNEDcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVVELNEDcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11638,10 +10790,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVVELNED()
   packetUBXNAVVELNED = new UBX_NAV_VELNED_t; // Allocate RAM for the main struct
   if (packetUBXNAVVELNED == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVVELNED: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVVELNED: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVVELNED->automaticFlags.flags.all = 0;
@@ -11770,10 +10922,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVHPPOSECEFcallback(void (*callbackPointer)(UBX_NAV
 
   if (packetUBXNAVHPPOSECEF->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVHPPOSECEFcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVHPPOSECEFcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11795,10 +10947,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVHPPOSECEFcallbackPtr(void (*callbackPointerPtr)(U
 
   if (packetUBXNAVHPPOSECEF->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVHPPOSECEFcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVHPPOSECEFcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -11830,10 +10982,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVHPPOSECEF()
   packetUBXNAVHPPOSECEF = new UBX_NAV_HPPOSECEF_t; // Allocate RAM for the main struct
   if (packetUBXNAVHPPOSECEF == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVHPPOSECEF: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVHPPOSECEF: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVHPPOSECEF->automaticFlags.flags.all = 0;
@@ -11874,7 +11026,7 @@ bool SFE_UBLOX_GNSS::getHPPOSLLH(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getHPPOSLLH: Autoreporting"));
+    //    _debugStream << "getHPPOSLLH: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_NAV, UBX_NAV_HPPOSLLH);
     return packetUBXNAVHPPOSLLH->moduleQueried.moduleQueried.bits.all;
@@ -11884,7 +11036,7 @@ bool SFE_UBLOX_GNSS::getHPPOSLLH(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getHPPOSLLH: Exit immediately"));
+    //    _debugStream << "getHPPOSLLH: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -11892,7 +11044,7 @@ bool SFE_UBLOX_GNSS::getHPPOSLLH(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getHPPOSLLH: Polling"));
+    //   _debugStream << "getHPPOSLLH: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting navigation position so we have to poll explicitly
@@ -11911,15 +11063,15 @@ bool SFE_UBLOX_GNSS::getHPPOSLLH(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getHPPOSLLH: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getHPPOSLLH: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getHPPOSLLH retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getHPPOSLLH retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -11984,10 +11136,10 @@ bool SFE_UBLOX_GNSS::setAutoHPPOSLLHcallback(void (*callbackPointer)(UBX_NAV_HPP
 
   if (packetUBXNAVHPPOSLLH->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoHPPOSLLHcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoHPPOSLLHcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12009,10 +11161,10 @@ bool SFE_UBLOX_GNSS::setAutoHPPOSLLHcallbackPtr(void (*callbackPointerPtr)(UBX_N
 
   if (packetUBXNAVHPPOSLLH->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoHPPOSLLHcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoHPPOSLLHcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12044,10 +11196,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVHPPOSLLH()
   packetUBXNAVHPPOSLLH = new UBX_NAV_HPPOSLLH_t; // Allocate RAM for the main struct
   if (packetUBXNAVHPPOSLLH == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVHPPOSLLH: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVHPPOSLLH: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVHPPOSLLH->automaticFlags.flags.all = 0;
@@ -12176,10 +11328,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVPVATcallback(void (*callbackPointer)(UBX_NAV_PVAT
 
   if (packetUBXNAVPVAT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVPVATcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVPVATcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12202,10 +11354,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVPVATcallbackPtr(void (*callbackPointerPtr)(UBX_NA
 
   if (packetUBXNAVPVAT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVPVATcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVPVATcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12238,10 +11390,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVPVAT()
   packetUBXNAVPVAT = new UBX_NAV_PVAT_t; // Allocate RAM for the main struct
   if (packetUBXNAVPVAT == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVPVAT: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVPVAT: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVPVAT->automaticFlags.flags.all = 0;
@@ -12369,10 +11521,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVTIMEUTCcallbackPtr(void (*callbackPointerPtr)(UBX
 
   if (packetUBXNAVTIMEUTC->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVTIMEUTCcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVTIMEUTCcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12404,10 +11556,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVTIMEUTC()
   packetUBXNAVTIMEUTC = new UBX_NAV_TIMEUTC_t; // Allocate RAM for the main struct
   if (packetUBXNAVTIMEUTC == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVTIMEUTC: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVTIMEUTC: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVTIMEUTC->automaticFlags.flags.all = 0;
@@ -12535,10 +11687,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVCLOCKcallback(void (*callbackPointer)(UBX_NAV_CLO
 
   if (packetUBXNAVCLOCK->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVCLOCKcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVCLOCKcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12560,10 +11712,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVCLOCKcallbackPtr(void (*callbackPointerPtr)(UBX_N
 
   if (packetUBXNAVCLOCK->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVCLOCKcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVCLOCKcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12595,10 +11747,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVCLOCK()
   packetUBXNAVCLOCK = new UBX_NAV_CLOCK_t; // Allocate RAM for the main struct
   if (packetUBXNAVCLOCK == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVCLOCK: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVCLOCK: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVCLOCK->automaticFlags.flags.all = 0;
@@ -12662,10 +11814,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVTIMELS()
   packetUBXNAVTIMELS = new UBX_NAV_TIMELS_t; // Allocate RAM for the main struct
   if (packetUBXNAVTIMELS == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVTIMELS: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVTIMELS: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVTIMELS->automaticFlags.flags.all = 0;
@@ -12781,10 +11933,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVSVINcallbackPtr(void (*callbackPointerPtr)(UBX_NA
 
   if (packetUBXNAVSVIN->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVSVINcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVSVINcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12816,10 +11968,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVSVIN()
   packetUBXNAVSVIN = new UBX_NAV_SVIN_t; // Allocate RAM for the main struct
   if (packetUBXNAVSVIN == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVSVIN: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVSVIN: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVSVIN->automaticFlags.flags.all = 0;
@@ -12949,10 +12101,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVSATcallback(void (*callbackPointer)(UBX_NAV_SAT_d
 
   if (packetUBXNAVSAT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVSATcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVSATcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -12974,10 +12126,10 @@ bool SFE_UBLOX_GNSS::setAutoNAVSATcallbackPtr(void (*callbackPointerPtr)(UBX_NAV
 
   if (packetUBXNAVSAT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoNAVSATcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoNAVSATcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13009,10 +12161,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVSAT()
   packetUBXNAVSAT = new UBX_NAV_SAT_t; // Allocate RAM for the main struct
   if (packetUBXNAVSAT == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVSAT: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVSAT: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVSAT->automaticFlags.flags.all = 0;
@@ -13146,10 +12298,10 @@ bool SFE_UBLOX_GNSS::setAutoRELPOSNEDcallback(void (*callbackPointer)(UBX_NAV_RE
 
   if (packetUBXNAVRELPOSNED->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRELPOSNEDcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRELPOSNEDcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13171,10 +12323,10 @@ bool SFE_UBLOX_GNSS::setAutoRELPOSNEDcallbackPtr(void (*callbackPointerPtr)(UBX_
 
   if (packetUBXNAVRELPOSNED->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRELPOSNEDcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRELPOSNEDcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13206,10 +12358,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVRELPOSNED()
   packetUBXNAVRELPOSNED = new UBX_NAV_RELPOSNED_t; // Allocate RAM for the main struct
   if (packetUBXNAVRELPOSNED == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVRELPOSNED: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVRELPOSNED: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVRELPOSNED->automaticFlags.flags.all = 0;
@@ -13250,7 +12402,7 @@ bool SFE_UBLOX_GNSS::getAOPSTATUS(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getAOPSTATUS: Autoreporting"));
+    //    _debugStream << "getAOPSTATUS: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_NAV, UBX_NAV_AOPSTATUS);
     return packetUBXNAVAOPSTATUS->moduleQueried.moduleQueried.bits.all;
@@ -13260,7 +12412,7 @@ bool SFE_UBLOX_GNSS::getAOPSTATUS(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getAOPSTATUS: Exit immediately"));
+    //    _debugStream << "getAOPSTATUS: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -13268,7 +12420,7 @@ bool SFE_UBLOX_GNSS::getAOPSTATUS(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getAOPSTATUS: Polling"));
+    //   _debugStream << "getAOPSTATUS: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting navigation position so we have to poll explicitly
@@ -13287,15 +12439,15 @@ bool SFE_UBLOX_GNSS::getAOPSTATUS(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getAOPSTATUS: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getAOPSTATUS: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getAOPSTATUS retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getAOPSTATUS retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -13357,10 +12509,10 @@ bool SFE_UBLOX_GNSS::setAutoAOPSTATUScallback(void (*callbackPointer)(UBX_NAV_AO
 
   if (packetUBXNAVAOPSTATUS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoAOPSTATUScallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoAOPSTATUScallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13382,10 +12534,10 @@ bool SFE_UBLOX_GNSS::setAutoAOPSTATUScallbackPtr(void (*callbackPointerPtr)(UBX_
 
   if (packetUBXNAVAOPSTATUS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoAOPSTATUScallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoAOPSTATUScallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13417,10 +12569,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXNAVAOPSTATUS()
   packetUBXNAVAOPSTATUS = new UBX_NAV_AOPSTATUS_t; // Allocate RAM for the main struct
   if (packetUBXNAVAOPSTATUS == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXNAVAOPSTATUS: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXNAVAOPSTATUS: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXNAVAOPSTATUS->automaticFlags.flags.all = 0;
@@ -13464,10 +12616,10 @@ bool SFE_UBLOX_GNSS::setRXMPMPcallbackPtr(void (*callbackPointer)(UBX_RXM_PMP_da
 
   if (packetUBXRXMPMP->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRXMPMPcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRXMPMPcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13481,10 +12633,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXRXMPMP()
   packetUBXRXMPMP = new UBX_RXM_PMP_t; // Allocate RAM for the main struct
   if (packetUBXRXMPMP == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXRXMPMP: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXRXMPMP: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXRXMPMP->automaticFlags.flags.all = 0;
@@ -13508,10 +12660,10 @@ bool SFE_UBLOX_GNSS::setRXMPMPmessageCallbackPtr(void (*callbackPointer)(UBX_RXM
 
   if (packetUBXRXMPMPmessage->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRXMPMPmessagecallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRXMPMPmessagecallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13525,10 +12677,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXRXMPMPmessage()
   packetUBXRXMPMPmessage = new UBX_RXM_PMP_message_t; // Allocate RAM for the main struct
   if (packetUBXRXMPMPmessage == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXRXMPMPmessage: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXRXMPMPmessage: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXRXMPMPmessage->automaticFlags.flags.all = 0;
@@ -13554,10 +12706,10 @@ bool SFE_UBLOX_GNSS::setRXMQZSSL6messageCallbackPtr(void (*callbackPointer)(UBX_
 
   if (packetUBXRXMQZSSL6message->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRXMQZSSL6messagecallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRXMQZSSL6messagecallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13571,10 +12723,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXRXMQZSSL6message()
   packetUBXRXMQZSSL6message = new UBX_RXM_QZSSL6_message_t; // Allocate RAM for the main struct
   if (packetUBXRXMQZSSL6message == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXRXMQZSSL6message: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXRXMQZSSL6message: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXRXMQZSSL6message->automaticFlags.flags.all = 0;
@@ -13597,10 +12749,10 @@ bool SFE_UBLOX_GNSS::setRXMCORcallbackPtr(void (*callbackPointer)(UBX_RXM_COR_da
 
   if (packetUBXRXMCOR->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRXMCORcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRXMCORcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13614,10 +12766,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXRXMCOR()
   packetUBXRXMCOR = new UBX_RXM_COR_t; // Allocate RAM for the main struct
   if (packetUBXRXMCOR == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXRXMCOR: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXRXMCOR: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXRXMCOR->automaticFlags.flags.all = 0;
@@ -13714,10 +12866,10 @@ bool SFE_UBLOX_GNSS::setAutoRXMSFRBXcallback(void (*callbackPointer)(UBX_RXM_SFR
 
   if (packetUBXRXMSFRBX->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRXMSFRBXcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRXMSFRBXcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13739,10 +12891,10 @@ bool SFE_UBLOX_GNSS::setAutoRXMSFRBXcallbackPtr(void (*callbackPointerPtr)(UBX_R
 
   if (packetUBXRXMSFRBX->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRXMSFRBXcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRXMSFRBXcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13774,10 +12926,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXRXMSFRBX()
   packetUBXRXMSFRBX = new UBX_RXM_SFRBX_t; // Allocate RAM for the main struct
   if (packetUBXRXMSFRBX == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXRXMSFRBX: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXRXMSFRBX: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXRXMSFRBX->automaticFlags.flags.all = 0;
@@ -13906,10 +13058,10 @@ bool SFE_UBLOX_GNSS::setAutoRXMRAWXcallback(void (*callbackPointer)(UBX_RXM_RAWX
 
   if (packetUBXRXMRAWX->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRXMRAWXcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRXMRAWXcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13931,10 +13083,10 @@ bool SFE_UBLOX_GNSS::setAutoRXMRAWXcallbackPtr(void (*callbackPointerPtr)(UBX_RX
 
   if (packetUBXRXMRAWX->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoRXMRAWXcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoRXMRAWXcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -13966,10 +13118,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXRXMRAWX()
   packetUBXRXMRAWX = new UBX_RXM_RAWX_t; // Allocate RAM for the main struct
   if (packetUBXRXMRAWX == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXRXMRAWX: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXRXMRAWX: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXRXMRAWX->automaticFlags.flags.all = 0;
@@ -14044,10 +13196,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXCFGPRT()
   packetUBXCFGPRT = new UBX_CFG_PRT_t; // Allocate RAM for the main struct
   if (packetUBXCFGPRT == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXCFGPRT: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXCFGPRT: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXCFGPRT->dataValid = false;
@@ -14087,10 +13239,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXCFGRATE()
   packetUBXCFGRATE = new UBX_CFG_RATE_t; // Allocate RAM for the main struct
   if (packetUBXCFGRATE == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXCFGRATE: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXCFGRATE: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXCFGRATE->automaticFlags.flags.all = 0;        // Redundant
@@ -14200,10 +13352,10 @@ bool SFE_UBLOX_GNSS::setAutoTIMTM2callback(void (*callbackPointer)(UBX_TIM_TM2_d
 
   if (packetUBXTIMTM2->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoTIMTM2callback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoTIMTM2callback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -14225,10 +13377,10 @@ bool SFE_UBLOX_GNSS::setAutoTIMTM2callbackPtr(void (*callbackPointerPtr)(UBX_TIM
 
   if (packetUBXTIMTM2->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoTIMTM2callbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoTIMTM2callbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -14260,10 +13412,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXTIMTM2()
   packetUBXTIMTM2 = new UBX_TIM_TM2_t; // Allocate RAM for the main struct
   if (packetUBXTIMTM2 == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXTIMTM2: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXTIMTM2: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXTIMTM2->automaticFlags.flags.all = 0;
@@ -14309,7 +13461,7 @@ bool SFE_UBLOX_GNSS::getESFALG(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getEsfAlignment: Autoreporting"));
+    //    _debugStream << "getEsfAlignment: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_ESF, UBX_ESF_ALG);
     return packetUBXESFALG->moduleQueried.moduleQueried.bits.all;
@@ -14319,7 +13471,7 @@ bool SFE_UBLOX_GNSS::getESFALG(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getEsfAlignment: Exit immediately"));
+    //    _debugStream << "getEsfAlignment: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -14327,7 +13479,7 @@ bool SFE_UBLOX_GNSS::getESFALG(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getEsfAlignment: Polling"));
+    //   _debugStream << "getEsfAlignment: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting HNR PVT so we have to poll explicitly
@@ -14346,15 +13498,15 @@ bool SFE_UBLOX_GNSS::getESFALG(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getEsfAlignment: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getEsfAlignment: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getEsfAlignment retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getEsfAlignment retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -14421,10 +13573,10 @@ bool SFE_UBLOX_GNSS::setAutoESFALGcallback(void (*callbackPointer)(UBX_ESF_ALG_d
 
   if (packetUBXESFALG->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFALGcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFALGcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -14446,10 +13598,10 @@ bool SFE_UBLOX_GNSS::setAutoESFALGcallbackPtr(void (*callbackPointerPtr)(UBX_ESF
 
   if (packetUBXESFALG->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFALGcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFALGcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -14481,10 +13633,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXESFALG()
   packetUBXESFALG = new UBX_ESF_ALG_t; // Allocate RAM for the main struct
   if (packetUBXESFALG == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXESFALG: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXESFALG: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXESFALG->automaticFlags.flags.all = 0;
@@ -14530,7 +13682,7 @@ bool SFE_UBLOX_GNSS::getESFSTATUS(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getEsfInfo: Autoreporting"));
+    //    _debugStream << "getEsfInfo: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_ESF, UBX_ESF_STATUS);
     return packetUBXESFSTATUS->moduleQueried.moduleQueried.bits.all;
@@ -14540,7 +13692,7 @@ bool SFE_UBLOX_GNSS::getESFSTATUS(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getEsfInfo: Exit immediately"));
+    //    _debugStream << "getEsfInfo: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -14548,7 +13700,7 @@ bool SFE_UBLOX_GNSS::getESFSTATUS(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getEsfInfo: Polling"));
+    //   _debugStream << "getEsfInfo: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting HNR PVT so we have to poll explicitly
@@ -14567,15 +13719,15 @@ bool SFE_UBLOX_GNSS::getESFSTATUS(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getEsfInfo: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getEsfInfo: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getEsfInfo retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getEsfInfo retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -14642,10 +13794,10 @@ bool SFE_UBLOX_GNSS::setAutoESFSTATUScallback(void (*callbackPointer)(UBX_ESF_ST
 
   if (packetUBXESFSTATUS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFSTATUScallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFSTATUScallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -14667,10 +13819,10 @@ bool SFE_UBLOX_GNSS::setAutoESFSTATUScallbackPtr(void (*callbackPointerPtr)(UBX_
 
   if (packetUBXESFSTATUS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFSTATUScallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFSTATUScallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -14703,10 +13855,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXESFSTATUS()
 
   if (packetUBXESFSTATUS == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXESFSTATUS: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXESFSTATUS: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXESFSTATUS->automaticFlags.flags.all = 0;
@@ -14752,7 +13904,7 @@ bool SFE_UBLOX_GNSS::getESFINS(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getEsfIns: Autoreporting"));
+    //    _debugStream << "getEsfIns: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_ESF, UBX_ESF_INS);
     return packetUBXESFINS->moduleQueried.moduleQueried.bits.all;
@@ -14762,7 +13914,7 @@ bool SFE_UBLOX_GNSS::getESFINS(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getEsfIns: Exit immediately"));
+    //    _debugStream << "getEsfIns: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -14770,7 +13922,7 @@ bool SFE_UBLOX_GNSS::getESFINS(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getEsfIns: Polling"));
+    //   _debugStream << "getEsfIns: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting HNR PVT so we have to poll explicitly
@@ -14789,15 +13941,15 @@ bool SFE_UBLOX_GNSS::getESFINS(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getEsfIns: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getEsfIns: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getEsfIns retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getEsfIns retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -14864,10 +14016,10 @@ bool SFE_UBLOX_GNSS::setAutoESFINScallback(void (*callbackPointer)(UBX_ESF_INS_d
 
   if (packetUBXESFINS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFINScallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFINScallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -14889,10 +14041,10 @@ bool SFE_UBLOX_GNSS::setAutoESFINScallbackPtr(void (*callbackPointerPtr)(UBX_ESF
 
   if (packetUBXESFINS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFINScallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFINScallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -14924,10 +14076,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXESFINS()
   packetUBXESFINS = new UBX_ESF_INS_t; // Allocate RAM for the main struct
   if (packetUBXESFINS == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXESFINS: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXESFINS: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXESFINS->automaticFlags.flags.all = 0;
@@ -15011,10 +14163,10 @@ bool SFE_UBLOX_GNSS::setAutoESFMEAScallback(void (*callbackPointer)(UBX_ESF_MEAS
 
   if (packetUBXESFMEAS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFMEAScallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFMEAScallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15036,10 +14188,10 @@ bool SFE_UBLOX_GNSS::setAutoESFMEAScallbackPtr(void (*callbackPointerPtr)(UBX_ES
 
   if (packetUBXESFMEAS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFMEAScallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFMEAScallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15071,10 +14223,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXESFMEAS()
   packetUBXESFMEAS = new UBX_ESF_MEAS_t; // Allocate RAM for the main struct
   if (packetUBXESFMEAS == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXESFMEAS: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXESFMEAS: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXESFMEAS->automaticFlags.flags.all = 0;
@@ -15153,10 +14305,10 @@ bool SFE_UBLOX_GNSS::setAutoESFRAWcallback(void (*callbackPointer)(UBX_ESF_RAW_d
 
   if (packetUBXESFRAW->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFRAWcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFRAWcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15178,10 +14330,10 @@ bool SFE_UBLOX_GNSS::setAutoESFRAWcallbackPtr(void (*callbackPointerPtr)(UBX_ESF
 
   if (packetUBXESFRAW->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoESFRAWcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoESFRAWcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15213,10 +14365,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXESFRAW()
   packetUBXESFRAW = new UBX_ESF_RAW_t; // Allocate RAM for the main struct
   if (packetUBXESFRAW == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXESFRAW: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXESFRAW: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXESFRAW->automaticFlags.flags.all = 0;
@@ -15258,7 +14410,7 @@ bool SFE_UBLOX_GNSS::getHNRATT(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getHNRAtt: Autoreporting"));
+    //    _debugStream << "getHNRAtt: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_HNR, UBX_HNR_ATT);
     return packetUBXHNRATT->moduleQueried.moduleQueried.bits.all;
@@ -15268,7 +14420,7 @@ bool SFE_UBLOX_GNSS::getHNRATT(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getHNRAtt: Exit immediately"));
+    //    _debugStream << "getHNRAtt: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -15276,7 +14428,7 @@ bool SFE_UBLOX_GNSS::getHNRATT(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getHNRAtt: Polling"));
+    //   _debugStream << "getHNRAtt: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting HNR attitude so we have to poll explicitly
@@ -15295,15 +14447,15 @@ bool SFE_UBLOX_GNSS::getHNRATT(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getHNRAtt: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getHNRAtt: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getHNRAtt retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getHNRAtt retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -15370,10 +14522,10 @@ bool SFE_UBLOX_GNSS::setAutoHNRATTcallback(void (*callbackPointer)(UBX_HNR_ATT_d
 
   if (packetUBXHNRATT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoHNRAttcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoHNRAttcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15395,10 +14547,10 @@ bool SFE_UBLOX_GNSS::setAutoHNRATTcallbackPtr(void (*callbackPointerPtr)(UBX_HNR
 
   if (packetUBXHNRATT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoHNRAttcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoHNRAttcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15430,10 +14582,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXHNRATT()
   packetUBXHNRATT = new UBX_HNR_ATT_t; // Allocate RAM for the main struct
   if (packetUBXHNRATT == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXHNRATT: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXHNRATT: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXHNRATT->automaticFlags.flags.all = 0;
@@ -15484,7 +14636,7 @@ bool SFE_UBLOX_GNSS::getHNRINS(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getHNRINS: Autoreporting"));
+    //    _debugStream << "getHNRINS: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_HNR, UBX_HNR_INS);
     return packetUBXHNRINS->moduleQueried.moduleQueried.bits.all;
@@ -15494,7 +14646,7 @@ bool SFE_UBLOX_GNSS::getHNRINS(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getHNRINS: Exit immediately"));
+    //    _debugStream << "getHNRINS: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -15502,7 +14654,7 @@ bool SFE_UBLOX_GNSS::getHNRINS(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getHNRINS: Polling"));
+    //   _debugStream << "getHNRINS: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting HNR vehicle dynamics so we have to poll explicitly
@@ -15521,15 +14673,15 @@ bool SFE_UBLOX_GNSS::getHNRINS(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getHNRINS: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getHNRINS: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getHNRINS retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getHNRINS retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -15596,10 +14748,10 @@ bool SFE_UBLOX_GNSS::setAutoHNRINScallback(void (*callbackPointer)(UBX_HNR_INS_d
 
   if (packetUBXHNRINS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoHNRINScallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoHNRINScallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15621,10 +14773,10 @@ bool SFE_UBLOX_GNSS::setAutoHNRINScallbackPtr(void (*callbackPointerPtr)(UBX_HNR
 
   if (packetUBXHNRINS->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoHNRINScallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoHNRINScallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15656,10 +14808,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXHNRINS()
   packetUBXHNRINS = new UBX_HNR_INS_t; // Allocate RAM for the main struct
   if (packetUBXHNRINS == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXHNRINS: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXHNRINS: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXHNRINS->automaticFlags.flags.all = 0;
@@ -15705,7 +14857,7 @@ bool SFE_UBLOX_GNSS::getHNRPVT(uint16_t maxWait)
     // The GPS is automatically reporting, we just check whether we got unread data
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getHNRPVT: Autoreporting"));
+    //    _debugStream << "getHNRPVT: Autoreporting" << endl;
     //  }
     checkUbloxInternal(&packetCfg, UBX_CLASS_HNR, UBX_HNR_PVT);
     return packetUBXHNRPVT->moduleQueried.moduleQueried.bits.all;
@@ -15715,7 +14867,7 @@ bool SFE_UBLOX_GNSS::getHNRPVT(uint16_t maxWait)
     // Someone else has to call checkUblox for us...
     //  if (_printDebug == true)
     //  {
-    //    _debugSerial->println(F("getHNRPVT: Exit immediately"));
+    //    _debugStream << "getHNRPVT: Exit immediately" << endl;
     //  }
     return (false);
   }
@@ -15723,7 +14875,7 @@ bool SFE_UBLOX_GNSS::getHNRPVT(uint16_t maxWait)
   {
     // if (_printDebug == true)
     // {
-    //   _debugSerial->println(F("getHNRPVT: Polling"));
+    //   _debugStream << "getHNRPVT: Polling" << endl;
     // }
 
     // The GPS is not automatically reporting HNR PVT so we have to poll explicitly
@@ -15742,15 +14894,15 @@ bool SFE_UBLOX_GNSS::getHNRPVT(uint16_t maxWait)
     {
       // if (_printDebug == true)
       // {
-      //   _debugSerial->println(F("getHNRPVT: data in packetCfg was OVERWRITTEN by another message (but that's OK)"));
+      //   _debugStream << "getHNRPVT: data in packetCfg was OVERWRITTEN by another message (but that's OK)" << endl;
       // }
       return (true);
     }
 
     // if (_printDebug == true)
     // {
-    //   _debugSerial->print(F("getHNRPVT retVal: "));
-    //   _debugSerial->println(statusString(retVal));
+    //   _debugStream << "getHNRPVT retVal: ";
+    //   _debugStream << statusString(retVal) << endl;
     // }
     return (false);
   }
@@ -15817,10 +14969,10 @@ bool SFE_UBLOX_GNSS::setAutoHNRPVTcallback(void (*callbackPointer)(UBX_HNR_PVT_d
 
   if (packetUBXHNRPVT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoHNRPVTcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoHNRPVTcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15842,10 +14994,10 @@ bool SFE_UBLOX_GNSS::setAutoHNRPVTcallbackPtr(void (*callbackPointerPtr)(UBX_HNR
 
   if (packetUBXHNRPVT->callbackData == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setAutoHNRPVTcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setAutoHNRPVTcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -15877,10 +15029,10 @@ bool SFE_UBLOX_GNSS::initPacketUBXHNRPVT()
   packetUBXHNRPVT = new UBX_HNR_PVT_t; // Allocate RAM for the main struct
   if (packetUBXHNRPVT == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initPacketUBXHNRPVT: RAM alloc failed!"));
-#endif
+      _debugStream << "initPacketUBXHNRPVT: RAM alloc failed!" << endl;
+
     return (false);
   }
   packetUBXHNRPVT->automaticFlags.flags.all = 0;
@@ -16025,10 +15177,10 @@ bool SFE_UBLOX_GNSS::setNMEAGPGGAcallback(void (*callbackPointer)(NMEA_GGA_data_
 
   if (storageNMEAGPGGA->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGPGGAcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGPGGAcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16050,10 +15202,10 @@ bool SFE_UBLOX_GNSS::setNMEAGPGGAcallbackPtr(void (*callbackPointerPtr)(NMEA_GGA
 
   if (storageNMEAGPGGA->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGPGGAcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGPGGAcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16067,10 +15219,10 @@ bool SFE_UBLOX_GNSS::initStorageNMEAGPGGA()
   storageNMEAGPGGA = new NMEA_GPGGA_t; // Allocate RAM for the main struct
   if (storageNMEAGPGGA == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initStorageNMEAGPGGA: RAM alloc failed!"));
-#endif
+      _debugStream << "initStorageNMEAGPGGA: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16127,10 +15279,10 @@ bool SFE_UBLOX_GNSS::setNMEAGNGGAcallback(void (*callbackPointer)(NMEA_GGA_data_
 
   if (storageNMEAGNGGA->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGNGGAcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGNGGAcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16152,10 +15304,10 @@ bool SFE_UBLOX_GNSS::setNMEAGNGGAcallbackPtr(void (*callbackPointerPtr)(NMEA_GGA
 
   if (storageNMEAGNGGA->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGNGGAcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGNGGAcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16169,10 +15321,10 @@ bool SFE_UBLOX_GNSS::initStorageNMEAGNGGA()
   storageNMEAGNGGA = new NMEA_GNGGA_t; // Allocate RAM for the main struct
   if (storageNMEAGNGGA == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initStorageNMEAGNGGA: RAM alloc failed!"));
-#endif
+      _debugStream << "initStorageNMEAGNGGA: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16236,10 +15388,10 @@ bool SFE_UBLOX_GNSS::setNMEAGPVTGcallback(void (*callbackPointer)(NMEA_VTG_data_
 
   if (storageNMEAGPVTG->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGPVTGcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGPVTGcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16261,10 +15413,10 @@ bool SFE_UBLOX_GNSS::setNMEAGPVTGcallbackPtr(void (*callbackPointerPtr)(NMEA_VTG
 
   if (storageNMEAGPVTG->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGPVTGcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGPVTGcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16278,10 +15430,10 @@ bool SFE_UBLOX_GNSS::initStorageNMEAGPVTG()
   storageNMEAGPVTG = new NMEA_GPVTG_t; // Allocate RAM for the main struct
   if (storageNMEAGPVTG == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initStorageNMEAGPVTG: RAM alloc failed!"));
-#endif
+      _debugStream << "initStorageNMEAGPVTG: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16338,10 +15490,10 @@ bool SFE_UBLOX_GNSS::setNMEAGNVTGcallback(void (*callbackPointer)(NMEA_VTG_data_
 
   if (storageNMEAGNVTG->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGNVTGcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGNVTGcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16363,10 +15515,10 @@ bool SFE_UBLOX_GNSS::setNMEAGNVTGcallbackPtr(void (*callbackPointerPtr)(NMEA_VTG
 
   if (storageNMEAGNVTG->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGNVTGcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGNVTGcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16380,10 +15532,10 @@ bool SFE_UBLOX_GNSS::initStorageNMEAGNVTG()
   storageNMEAGNVTG = new NMEA_GNVTG_t; // Allocate RAM for the main struct
   if (storageNMEAGNVTG == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initStorageNMEAGNVTG: RAM alloc failed!"));
-#endif
+      _debugStream << "initStorageNMEAGNVTG: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16447,10 +15599,10 @@ bool SFE_UBLOX_GNSS::setNMEAGPRMCcallback(void (*callbackPointer)(NMEA_RMC_data_
 
   if (storageNMEAGPRMC->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGPRMCcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGPRMCcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16472,10 +15624,10 @@ bool SFE_UBLOX_GNSS::setNMEAGPRMCcallbackPtr(void (*callbackPointerPtr)(NMEA_RMC
 
   if (storageNMEAGPRMC->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGPRMCcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGPRMCcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16489,10 +15641,10 @@ bool SFE_UBLOX_GNSS::initStorageNMEAGPRMC()
   storageNMEAGPRMC = new NMEA_GPRMC_t; // Allocate RAM for the main struct
   if (storageNMEAGPRMC == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initStorageNMEAGPRMC: RAM alloc failed!"));
-#endif
+      _debugStream << "initStorageNMEAGPRMC: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16549,10 +15701,10 @@ bool SFE_UBLOX_GNSS::setNMEAGNRMCcallback(void (*callbackPointer)(NMEA_RMC_data_
 
   if (storageNMEAGNRMC->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGNRMCcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGNRMCcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16574,10 +15726,10 @@ bool SFE_UBLOX_GNSS::setNMEAGNRMCcallbackPtr(void (*callbackPointerPtr)(NMEA_RMC
 
   if (storageNMEAGNRMC->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGNRMCcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGNRMCcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16591,10 +15743,10 @@ bool SFE_UBLOX_GNSS::initStorageNMEAGNRMC()
   storageNMEAGNRMC = new NMEA_GNRMC_t; // Allocate RAM for the main struct
   if (storageNMEAGNRMC == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initStorageNMEAGNRMC: RAM alloc failed!"));
-#endif
+      _debugStream << "initStorageNMEAGNRMC: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16658,10 +15810,10 @@ bool SFE_UBLOX_GNSS::setNMEAGPZDAcallback(void (*callbackPointer)(NMEA_ZDA_data_
 
   if (storageNMEAGPZDA->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGPZDAcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGPZDAcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16683,10 +15835,10 @@ bool SFE_UBLOX_GNSS::setNMEAGPZDAcallbackPtr(void (*callbackPointerPtr)(NMEA_ZDA
 
   if (storageNMEAGPZDA->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGPZDAcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGPZDAcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16700,10 +15852,10 @@ bool SFE_UBLOX_GNSS::initStorageNMEAGPZDA()
   storageNMEAGPZDA = new NMEA_GPZDA_t; // Allocate RAM for the main struct
   if (storageNMEAGPZDA == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initStorageNMEAGPZDA: RAM alloc failed!"));
-#endif
+      _debugStream << "initStorageNMEAGPZDA: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16760,10 +15912,10 @@ bool SFE_UBLOX_GNSS::setNMEAGNZDAcallback(void (*callbackPointer)(NMEA_ZDA_data_
 
   if (storageNMEAGNZDA->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGNZDAcallback: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGNZDAcallback: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16785,10 +15937,10 @@ bool SFE_UBLOX_GNSS::setNMEAGNZDAcallbackPtr(void (*callbackPointerPtr)(NMEA_ZDA
 
   if (storageNMEAGNZDA->callbackCopy == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("setNMEAGNZDAcallbackPtr: RAM alloc failed!"));
-#endif
+      _debugStream << "setNMEAGNZDAcallbackPtr: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16802,10 +15954,10 @@ bool SFE_UBLOX_GNSS::initStorageNMEAGNZDA()
   storageNMEAGNZDA = new NMEA_GNZDA_t; // Allocate RAM for the main struct
   if (storageNMEAGNZDA == NULL)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("initStorageNMEAGNZDA: RAM alloc failed!"));
-#endif
+      _debugStream << "initStorageNMEAGNZDA: RAM alloc failed!" << endl;
+
     return (false);
   }
 
@@ -16882,10 +16034,10 @@ uint8_t SFE_UBLOX_GNSS::getNavigationFrequency(uint16_t maxWait)
 
   if (measurementRate == 0)
   {
-#ifndef SFE_UBLOX_REDUCED_PROG_MEM
+
     if ((_printDebug == true) || (_printLimitedDebug == true)) // This is important. Print this if doing limited debugging
-      _debugSerial->println(F("getNavigationFrequency: zero measRate!"));
-#endif
+      _debugStream << "getNavigationFrequency: zero measRate!" << endl;
+
     return (0); // Avoid divide-by-zero error
   }
 
@@ -17469,9 +16621,9 @@ bool SFE_UBLOX_GNSS::getNAVPVTPSMMode(uint16_t maxWait)
   if (packetUBXNAVPVT == NULL) // Bail if the RAM allocation failed
     return 0;
 
-  if (packetUBXNAVPVT->moduleQueried.moduleQueried1.bits.psmState== false)
+  if (packetUBXNAVPVT->moduleQueried.moduleQueried1.bits.psmState == false)
     getPVT(maxWait);
-  packetUBXNAVPVT->moduleQueried.moduleQueried1.bits.psmState= false; // Since we are about to give this to user, mark this data as stale
+  packetUBXNAVPVT->moduleQueried.moduleQueried1.bits.psmState = false; // Since we are about to give this to user, mark this data as stale
   packetUBXNAVPVT->moduleQueried.moduleQueried1.bits.all = false;
   return (packetUBXNAVPVT->data.flags.bits.psmState);
 }

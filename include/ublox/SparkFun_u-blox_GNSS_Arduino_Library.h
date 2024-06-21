@@ -43,24 +43,22 @@
 #ifndef SPARKFUN_UBLOX_ARDUINO_LIBRARY_H
 #define SPARKFUN_UBLOX_ARDUINO_LIBRARY_H
 
-#if (ARDUINO >= 100)
-#include "Arduino.h"
-#else
-#include "WProgram.h"
-#endif
+#include <cstdint>
+#include <string>
+#include <sstream>
+#include <iostream>
+#include "ublox/u-blox_config_keys.h"
+#include "ublox/u-blox_structs.h"
+#include "ublox/stream.h"
 
-#include <Wire.h>
-
-#include <SPI.h>
-
-#include "u-blox_config_keys.h"
-#include "u-blox_structs.h"
-
+using std::ostream;
+using std::string;
+using std::uint32_t, std::uint8_t, std::size_t;
 // Uncomment the next line (or add SFE_UBLOX_REDUCED_PROG_MEM as a compiler directive) to reduce the amount of program memory used by the library
-//#define SFE_UBLOX_REDUCED_PROG_MEM // Uncommenting this line will delete the minor debug messages to save memory
+// #define SFE_UBLOX_REDUCED_PROG_MEM // Uncommenting this line will delete the minor debug messages to save memory
 
 // Uncomment the next line (or add SFE_UBLOX_DISABLE_AUTO_NMEA as a compiler directive) to reduce the amount of program memory used by the library
-//#define SFE_UBLOX_DISABLE_AUTO_NMEA // Uncommenting this line will disable auto-NMEA support to save memory
+// #define SFE_UBLOX_DISABLE_AUTO_NMEA // Uncommenting this line will disable auto-NMEA support to save memory
 
 // The code exceeds the program memory on the ATmega328P (Arduino Uno), so let's delete the minor debug messages and disable auto-NMEA support anyway
 // However, the ATmega2560 and ATmega1280 _do_ have enough memory, so let's exclude those
@@ -593,7 +591,7 @@ enum sfe_ublox_pms_mode_e
   SFE_UBLOX_PMS_MODE_INVALID = 0xff
 };
 
-//Values for UBX-CFG-RXM
+// Values for UBX-CFG-RXM
 enum sfe_ublox_rxm_mode_e
 {
   SFE_UBLOX_CFG_RXM_CONTINUOUS = 0,
@@ -605,7 +603,7 @@ enum sfe_ublox_rxm_mode_e
 #ifndef MAX_PAYLOAD_SIZE
 // v2.0: keep this for backwards-compatibility, but this is largely superseded by setPacketCfgPayloadSize
 #define MAX_PAYLOAD_SIZE 276 // We need >=250 bytes for getProtocolVersion on the NEO-F10N
-//#define MAX_PAYLOAD_SIZE 768 //Worst case: UBX_CFG_VALSET packet with 64 keyIDs each with 64 bit values
+// #define MAX_PAYLOAD_SIZE 768 //Worst case: UBX_CFG_VALSET packet with 64 keyIDs each with 64 bit values
 #endif
 
 // For storing SPI bytes received during sendSpiCommand
@@ -703,35 +701,13 @@ public:
 
   // Begin communication with the GNSS. Advanced users can assume success if required. Useful if the port is already outputting messages at high navigation rate.
   // Begin will then return true if "signs of life" have been seen: reception of _any_ valid UBX packet or _any_ valid NMEA header.
-  // By default use the default I2C address, and use Wire port
-  bool begin(TwoWire &wirePort = Wire, uint8_t deviceAddress = 0x42, uint16_t maxWait = defaultMaxWait, bool assumeSuccess = false); // Returns true if module is detected
   // serialPort needs to be perviously initialized to correct baud rate
   bool begin(Stream &serialPort, uint16_t maxWait = defaultMaxWait, bool assumeSuccess = false); // Returns true if module is detected
-  // SPI - supply instance of SPIClass, chip select pin and SPI speed (in Hz)
-  bool begin(SPIClass &spiPort, uint8_t csPin, uint32_t spiSpeed, uint16_t maxWait = defaultMaxWait, bool assumeSuccess = false);
 
   void end(void); // Stop all automatic message processing. Free all used RAM
 
-  void setI2CpollingWait(uint8_t newPollingWait_ms); // Allow the user to change the I2C polling wait if required
-  void setSPIpollingWait(uint8_t newPollingWait_ms); // Allow the user to change the SPI polling wait if required
-
   // Set the max number of bytes set in a given I2C transaction
   uint8_t i2cTransactionSize = 32; // Default to ATmega328 limit
-
-  // Control the size of the internal I2C transaction amount
-  void setI2CTransactionSize(uint8_t bufferSize);
-  uint8_t getI2CTransactionSize(void);
-
-  // Support for platforms like ESP32 which do not support multiple I2C restarts
-  // If _i2cStopRestart is true, endTransmission will always use a stop. If false, a restart will be used where needed.
-  // The default value for _i2cStopRestart is set in the class instantiation code.
-  void setI2cStopRestart(bool stop) { _i2cStopRestart = stop; };
-  bool getI2cStopRestart(void) { return (_i2cStopRestart); };
-
-  // Control the size of the spi buffer. If the buffer isn't big enough, we'll start to lose bytes
-  // That we receive if the buffer is full!
-  void setSpiTransactionSize(uint8_t bufferSize);
-  uint8_t getSpiTransactionSize(void);
 
   // Control the size of maxNMEAByteCount
   void setMaxNMEAByteCount(int8_t newMax);
@@ -740,27 +716,11 @@ public:
   // Returns true if device answers on _gpsI2Caddress address or via Serial
   bool isConnected(uint16_t maxWait = defaultMaxWait);
 
-// Enable debug messages using the chosen Serial port (Stream)
-// Boards like the RedBoard Turbo use SerialUSB (not Serial).
-// But other boards like the SAMD51 Thing Plus use Serial (not SerialUSB).
-// These lines let the code compile cleanly on as many SAMD boards as possible.
-#if defined(ARDUINO_ARCH_SAMD)                                                         // Is this a SAMD board?
-#if defined(USB_VID)                                                                   // Is the USB Vendor ID defined?
-#if (USB_VID == 0x1B4F)                                                                // Is this a SparkFun board?
-#if !defined(ARDUINO_SAMD51_THING_PLUS) & !defined(ARDUINO_SAMD51_MICROMOD)            // If it is not a SAMD51 Thing Plus or SAMD51 MicroMod
-  void enableDebugging(Stream &debugPort = SerialUSB, bool printLimitedDebug = false); // Given a port to print to, enable debug messages. Default to all, not limited.
-#else
-  void enableDebugging(Stream &debugPort = Serial, bool printLimitedDebug = false); // Given a port to print to, enable debug messages. Default to all, not limited.
-#endif
-#else
-  void enableDebugging(Stream &debugPort = Serial, bool printLimitedDebug = false); // Given a port to print to, enable debug messages. Default to all, not limited.
-#endif
-#else
-  void enableDebugging(Stream &debugPort = Serial, bool printLimitedDebug = false); // Given a port to print to, enable debug messages. Default to all, not limited.
-#endif
-#else
-  void enableDebugging(Stream &debugPort = Serial, bool printLimitedDebug = false); // Given a port to print to, enable debug messages. Default to all, not limited.
-#endif
+  // Enable debug messages using the chosen Serial port (Stream)
+  // Boards like the RedBoard Turbo use SerialUSB (not Serial).
+  // But other boards like the SAMD51 Thing Plus use Serial (not SerialUSB).
+  // These lines let the code compile cleanly on as many SAMD boards as possible.
+  void enableDebugging(bool printLimitedDebug = false); // Given a port to print to, enable debug messages. Default to all, not limited.
 
   void disableDebugging(void);                       // Turn off debug statements
   void debugPrint(char *message);                    // Safely print debug statements
@@ -775,9 +735,7 @@ public:
   // Will default to using packetCfg to look for explicit autoPVT packets so they get processed correctly by processUBX
   bool checkUblox(uint8_t requestedClass = 0, uint8_t requestedID = 0); // Checks module with user selected commType
 
-  bool checkUbloxI2C(ubxPacket *incomingUBX, uint8_t requestedClass, uint8_t requestedID);    // Method for I2C polling of data, passing any new bytes to process()
   bool checkUbloxSerial(ubxPacket *incomingUBX, uint8_t requestedClass, uint8_t requestedID); // Method for serial polling of data, passing any new bytes to process()
-  bool checkUbloxSpi(ubxPacket *incomingUBX, uint8_t requestedClass, uint8_t requestedID);    // Method for spi polling of data, passing any new bytes to process()
 
   // Process the incoming data
 
@@ -795,9 +753,7 @@ public:
 
   void calcChecksum(ubxPacket *msg);                                                                                     // Sets the checksumA and checksumB of a given messages
   sfe_ublox_status_e sendCommand(ubxPacket *outgoingUBX, uint16_t maxWait = defaultMaxWait, bool expectACKonly = false); // Given a packet and payload, send everything including CRC bytes, return true if we got a response
-  sfe_ublox_status_e sendI2cCommand(ubxPacket *outgoingUBX, uint16_t maxWait = defaultMaxWait);
   void sendSerialCommand(ubxPacket *outgoingUBX);
-  void sendSpiCommand(ubxPacket *outgoingUBX);
 
   void printPacket(ubxPacket *packet, bool alwaysPrintPayload = false); // Useful for debugging
 
@@ -822,11 +778,11 @@ public:
 // allowing the user to override with their own time data with setUTCTimeAssistance.
 // offset allows a sub-set of the data to be sent - starting from offset.
 #define defaultMGAdelay 7 // Default to waiting for 7ms between each MGA message
-  size_t pushAssistNowData(const String &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
+  size_t pushAssistNowData(const string &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
   size_t pushAssistNowData(const uint8_t *dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
-  size_t pushAssistNowData(bool skipTime, const String &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
+  size_t pushAssistNowData(bool skipTime, const string &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
   size_t pushAssistNowData(bool skipTime, const uint8_t *dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
-  size_t pushAssistNowData(size_t offset, bool skipTime, const String &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
+  size_t pushAssistNowData(size_t offset, bool skipTime, const string &dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
   size_t pushAssistNowData(size_t offset, bool skipTime, const uint8_t *dataBytes, size_t numDataBytes, sfe_ublox_mga_assist_ack_e mgaAck = SFE_UBLOX_MGA_ASSIST_ACK_NO, uint16_t maxWait = defaultMGAdelay);
 
 // Provide initial time assistance
@@ -848,7 +804,7 @@ public:
   // The daysIntoFture parameter makes it easy to get the data for (e.g.) tomorrow based on today's date
   // Returns numDataBytes if unsuccessful
   // TO DO: enhance this so it will find the nearest data for the chosen day - instead of an exact match
-  size_t findMGAANOForDate(const String &dataBytes, size_t numDataBytes, uint16_t year, uint8_t month, uint8_t day, uint8_t daysIntoFuture = 0);
+  size_t findMGAANOForDate(const string &dataBytes, size_t numDataBytes, uint16_t year, uint8_t month, uint8_t day, uint8_t daysIntoFuture = 0);
   size_t findMGAANOForDate(const uint8_t *dataBytes, size_t numDataBytes, uint16_t year, uint8_t month, uint8_t day, uint8_t daysIntoFuture = 0);
 
 // Read the whole navigation data base. The receiver will send all available data from its internal database.
@@ -876,14 +832,11 @@ public:
   bool setPortOutput(uint8_t portID, uint8_t comSettings, uint16_t maxWait = defaultMaxWait); // Configure a given port to output UBX, NMEA, RTCM3, SPARTN or a combination thereof
   bool setPortInput(uint8_t portID, uint8_t comSettings, uint16_t maxWait = defaultMaxWait);  // Configure a given port to input UBX, NMEA, RTCM3, SPARTN or a combination thereof
 
-  bool setI2CAddress(uint8_t deviceAddress, uint16_t maxTime = defaultMaxWait);                                // Changes the I2C address of the u-blox module
   void setSerialRate(uint32_t baudrate, uint8_t uartPort = COM_PORT_UART1, uint16_t maxTime = defaultMaxWait); // Changes the serial baud rate of the u-blox module, uartPort should be COM_PORT_UART1/2
 
-  bool setI2COutput(uint8_t comSettings, uint16_t maxWait = defaultMaxWait);   // Configure I2C port to output UBX, NMEA, RTCM3, SPARTN or a combination thereof
   bool setUART1Output(uint8_t comSettings, uint16_t maxWait = defaultMaxWait); // Configure UART1 port to output UBX, NMEA, RTCM3, SPARTN or a combination thereof
   bool setUART2Output(uint8_t comSettings, uint16_t maxWait = defaultMaxWait); // Configure UART2 port to output UBX, NMEA, RTCM3, SPARTN or a combination thereof
   bool setUSBOutput(uint8_t comSettings, uint16_t maxWait = defaultMaxWait);   // Configure USB port to output UBX, NMEA, RTCM3, SPARTN or a combination thereof
-  bool setSPIOutput(uint8_t comSettings, uint16_t maxWait = defaultMaxWait);   // Configure SPI port to output UBX, NMEA, RTCM3, SPARTN or a combination thereof
   void setNMEAOutputPort(Stream &nmeaOutputPort);                              // Sets the internal variable for the port to direct NMEA characters to
   void setOutputPort(Stream &outputPort);                                      // Sets the internal variable for the port to direct ALL characters to
 
@@ -930,10 +883,10 @@ public:
   moduleSWVersion_t *moduleSWVersion = NULL;                         // Pointer to struct. RAM will be allocated for this if/when necessary
 
   // Support for geofences
-  bool addGeofence(int32_t latitude, int32_t longitude, uint32_t radius, byte confidence = 0, byte pinPolarity = 0, byte pin = 0, uint16_t maxWait = defaultMaxWait); // Add a new geofence
-  bool clearGeofences(uint16_t maxWait = defaultMaxWait);                                                                                                             // Clears all geofences
-  bool clearAntPIO(uint16_t maxWait = defaultMaxWait);                                                                                                                // Clears the antenna control pin settings to release the PIOs
-  bool getGeofenceState(geofenceState &currentGeofenceState, uint16_t maxWait = defaultMaxWait);                                                                      // Returns the combined geofence state
+  bool addGeofence(int32_t latitude, int32_t longitude, uint32_t radius, uint8_t confidence = 0, uint8_t pinPolarity = 0, uint8_t pin = 0, uint16_t maxWait = defaultMaxWait); // Add a new geofence
+  bool clearGeofences(uint16_t maxWait = defaultMaxWait);                                                                                                                      // Clears all geofences
+  bool clearAntPIO(uint16_t maxWait = defaultMaxWait);                                                                                                                         // Clears the antenna control pin settings to release the PIOs
+  bool getGeofenceState(geofenceState &currentGeofenceState, uint16_t maxWait = defaultMaxWait);                                                                               // Returns the combined geofence state
   // Storage for the geofence parameters. RAM is allocated for this if/when required.
   geofenceParams_t *currentGeofenceParams = NULL; // Pointer to struct. RAM will be allocated for this if/when necessary
 
@@ -943,7 +896,7 @@ public:
   bool powerOff(uint32_t durationInMs, uint16_t maxWait = defaultMaxWait);
   bool powerOffWithInterrupt(uint32_t durationInMs, uint32_t wakeupSources = VAL_RXM_PMREQ_WAKEUPSOURCE_EXTINT0, bool forceWhileUsb = true, uint16_t maxWait = defaultMaxWait);
   // Power Mode Setup. Values period and onTime are only valid if mode is SFE_UBLOX_PMS_MODE_INTERVAL
-  bool setPowerManagement(sfe_ublox_pms_mode_e mode, uint16_t period=0, uint16_t onTime=0, uint16_t maxWait = defaultMaxWait);
+  bool setPowerManagement(sfe_ublox_pms_mode_e mode, uint16_t period = 0, uint16_t onTime = 0, uint16_t maxWait = defaultMaxWait);
   bool setupPowerMode(sfe_ublox_rxm_mode_e mode, uint16_t maxWait = defaultMaxWait);
 
   // Change the dynamic platform model using UBX-CFG-NAV5
@@ -955,10 +908,10 @@ public:
   uint16_t getNAV5PositionAccuracy(uint16_t maxWait = defaultMaxWait); // Get the position accuracy - returns 0 if the sendCommand fails
 
   // Reset / enable / configure the odometer
-  bool resetOdometer(uint16_t maxWait = defaultMaxWait); // Reset the odometer
-  bool enableOdometer(bool enable = true, uint16_t maxWait = defaultMaxWait); // Enable / disable the odometer
+  bool resetOdometer(uint16_t maxWait = defaultMaxWait);                                                                                                                           // Reset the odometer
+  bool enableOdometer(bool enable = true, uint16_t maxWait = defaultMaxWait);                                                                                                      // Enable / disable the odometer
   bool getOdometerConfig(uint8_t *flags, uint8_t *odoCfg, uint8_t *cogMaxSpeed, uint8_t *cogMaxPosAcc, uint8_t *velLpGain, uint8_t *cogLpGain, uint16_t maxWait = defaultMaxWait); // Read the odometer configuration
-  bool setOdometerConfig(uint8_t flags, uint8_t odoCfg, uint8_t cogMaxSpeed, uint8_t cogMaxPosAcc, uint8_t velLpGain, uint8_t cogLpGain, uint16_t maxWait = defaultMaxWait); // Configure the odometer
+  bool setOdometerConfig(uint8_t flags, uint8_t odoCfg, uint8_t cogMaxSpeed, uint8_t cogMaxPosAcc, uint8_t velLpGain, uint8_t cogLpGain, uint16_t maxWait = defaultMaxWait);       // Configure the odometer
 
   // Enable/Disable individual GNSS systems using UBX-CFG-GNSS
   // Note: you must leave at least one major GNSS enabled! If in doubt, enable GPS before disabling the others
@@ -1424,9 +1377,9 @@ public:
 
   uint8_t getFixType(uint16_t maxWait = defaultMaxWait); // Returns the type of fix: 0=no, 3=3D, 4=GNSS+Deadreckoning
 
-  bool getGnssFixOk(uint16_t maxWait = defaultMaxWait); // Get whether we have a valid fix (i.e within DOP & accuracy masks)
+  bool getGnssFixOk(uint16_t maxWait = defaultMaxWait);     // Get whether we have a valid fix (i.e within DOP & accuracy masks)
   bool getNAVPVTPSMMode(uint16_t maxWait = defaultMaxWait); // Not fully documented power save mode value
-  bool getDiffSoln(uint16_t maxWait = defaultMaxWait);  // Get whether differential corrections were applied
+  bool getDiffSoln(uint16_t maxWait = defaultMaxWait);      // Get whether differential corrections were applied
   bool getHeadVehValid(uint16_t maxWait = defaultMaxWait);
   uint8_t getCarrierSolutionType(uint16_t maxWait = defaultMaxWait); // Returns RTK solution: 0=no, 1=float solution, 2=fixed solution
 
@@ -1671,9 +1624,6 @@ private:
   // Calculate how much RAM is needed to store the payload for a given automatic message
   uint16_t getMaxPayloadSize(uint8_t Class, uint8_t ID);
 
-  // Do the actual transfer to SPI
-  void spiTransfer(uint8_t byteToTransfer);
-
   bool initGeofenceParams();  // Allocate RAM for currentGeofenceParams and initialize it
   bool initModuleSWVersion(); // Allocate RAM for moduleSWVersion and initialize it
 
@@ -1730,12 +1680,10 @@ private:
 #endif
 
   // Variables
-  TwoWire *_i2cPort;              // The generic connection to user's chosen I2C hardware
-  Stream *_serialPort;            // The generic connection to user's chosen Serial hardware
-  Stream *_nmeaOutputPort = NULL; // The user can assign an output port to print NMEA sentences if they wish
-  Stream *_debugSerial;           // The stream to send debug messages to if enabled
+  Stream *_serialPort;               // The generic connection to user's chosen Serial hardware
+  Stream *_nmeaOutputPort = NULL;    // The user can assign an output port to print NMEA sentences if they wish
+  ostream &_debugStream = std::cout; // The stream to send debug messages to if enabled
   Stream *_outputPort = NULL;
-  SPIClass *_spiPort; // The instance of SPIClass
   uint8_t _csPin;     // The chip select pin
   uint32_t _spiSpeed; // The speed to use for SPI (Hz)
 
